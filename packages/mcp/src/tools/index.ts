@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { SceneOperations } from '../operations'
 import { registerApplyPatch } from './apply-patch'
+import { registerCabinetTools } from './cabinet-tools'
 import { registerCheckCollisions } from './check-collisions'
 import { registerConstructionTools } from './construction-tools'
 import { registerCreateLevel } from './create-level'
@@ -43,6 +44,7 @@ export function registerTools(server: McpServer, operations: SceneOperations): v
   registerSceneQueryTools(server, operations)
   registerMeasure(server, operations)
   registerConstructionTools(server, operations)
+  registerCabinetTools(server, operations)
   registerRoomTools(server, operations)
   registerApplyPatch(server, operations)
   registerCreateLevel(server, operations)
