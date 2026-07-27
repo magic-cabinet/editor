@@ -1,0 +1,13 @@
+.git
+.github
+.next
+.turbo
+**/.next
+**/.turbo
+**/dist
+**/*.tsbuildinfo
+node_modules
+**/node_modules
+*.log
+.env
+.env.*
