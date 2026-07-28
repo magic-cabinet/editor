@@ -124,6 +124,39 @@ Verified live: `PUT /api/scenes/:id` writing `slots: {front: '#1f6feb'}` onto th
 14 cabinets turned every door blue and left carcass, countertop, backsplash, cooktop
 glass and sink basins untouched.
 
+### Dangling library refs — the same silence, and it bit us first
+
+A `library:<id>` naming a material that does not exist fails **identically** to the hex
+case above: `getMaterialPresetByRef` → `getCatalogMaterialById(...)` → `null`
+(`material-library.ts:4255`), which lands on the same `if (resolved) return resolved`
+fall-through. Unknown id and unsupported ref shape are indistinguishable to every
+consumer, and both read as "use the declared default."
+
+`slab_magic_porch` carried `library:wood-flooring-oak` from the first commit of
+`house-shell.ts`. That id is not among the catalog's 114. The reason nobody saw it is
+worth more than the fix: the slab's own `SLAB_TOP_SLOT_DEFAULT` is
+`library:wood-woodplank48` (`nodes/src/slab/slots.ts`), so the porch fell back to a wood
+plank — a plausible timber porch, and **the same finish as `slab_magic_floor`**, which
+declares no slots and takes that same default. (Separate geometry, so not the same pixels;
+the same material, which is what the override existed to change.) It was inert for its
+whole life while looking exactly like it was working. Now `library:wood-floorplank1`, a
+real id that differs from the slab default — the only thing that makes the override
+observable at all.
+
+The durable half is in `pilot.test.ts`: it walks every node of
+`createMagicKitchenPilotScene()`, collects each `library:` slot ref, and asserts all of
+them resolve — with two controls, because an empty sweep or a lookup that never returns
+null would pass vacuously in exactly the way the ref itself did. Both controls were
+mutation-checked: restoring the bad id fails naming `slab_magic_porch`/`surface`, and
+emptying `slots` fails on the sweep being empty.
+
+Found by Bumble, sweeping all 24 `library:` refs in the tree against the real id set
+rather than checking the one under suspicion — 16 resolve (the control that the query
+finds real ones), 8 dangle, and 7 of those 8 are deliberate test fixtures. This was the
+eighth. It is the strongest argument in the upstream issue: the silent fallback we are
+asking upstream to make loud had already hidden a typo of ours through a full paint-mode
+build, a 2645-test suite, and two rounds of mutual review.
+
 ## Frames — the part that keeps producing invisible bugs
 
 Three coordinate conventions meet in this plugin, and every mismatch so far has been

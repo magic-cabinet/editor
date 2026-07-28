@@ -6,6 +6,7 @@ import {
   PILOT_KITCHEN_INPUT,
   validateKitchen,
 } from '@magic-cabinet/engine'
+import { getMaterialPresetByRef } from '@pascal-app/core'
 import { adaptKitchenResult } from './adapter'
 import { createMagicKitchenPilotScene } from './house'
 import { createMagicKitchenHouseShell } from './house-shell'
@@ -188,6 +189,34 @@ describe('Magic Kitchen House pilot', () => {
     expect(
       nodes.filter((node) => (node as { type: string }).type === 'magic-cabinet:component').length,
     ).toBeGreaterThan(30)
+  })
+
+  /**
+   * A dangling `library:<id>` is invisible at runtime. `resolveMaterialRef`
+   * returns null for an unknown id exactly as it does for an unsupported ref
+   * shape, and every consumer treats null as "use the declared slot default" —
+   * so a mistyped floor finish still renders as a floor, with no error and no
+   * blank surface. `library:wood-flooring-oak` shipped that way and collapsed
+   * the porch onto the house floor's plank for the life of the plugin.
+   *
+   * This sweeps what the plugin actually emits, so the next typo fails here
+   * rather than rendering plausibly.
+   */
+  test('every library: slot ref the plugin emits names a real catalog material', () => {
+    const refs = Object.values(createMagicKitchenPilotScene().nodes)
+      .flatMap((node) =>
+        Object.entries((node as { slots?: Record<string, string> }).slots ?? {}).map(
+          ([slotId, ref]) => ({ node: node.id, slotId, ref }),
+        ),
+      )
+      .filter(({ ref }) => ref.startsWith('library:'))
+
+    // Controls — an empty sweep and a lookup that never returns null both pass
+    // this test vacuously, which is the failure mode the ref itself had.
+    expect(refs.length).toBeGreaterThan(0)
+    expect(getMaterialPresetByRef('library:not-a-real-material')).toBeNull()
+
+    expect(refs.filter(({ ref }) => getMaterialPresetByRef(ref) === null)).toEqual([])
   })
 })
 

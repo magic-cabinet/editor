@@ -179,7 +179,13 @@ export function createMagicKitchenHouseShell(): SceneGraph {
       ],
       elevation: 0.09,
       thickness: 0.14,
-      slots: { surface: 'library:wood-flooring-oak' },
+      // Reads as a distinct decking plank against `slab_magic_floor`, which
+      // takes the slab's own `SLAB_TOP_SLOT_DEFAULT` (`library:wood-woodplank48`).
+      // The override only earns its place by differing from that default —
+      // this id was `wood-flooring-oak`, which does not exist in the catalog,
+      // so the porch silently fell through to the house floor's plank and the
+      // two were indistinguishable. See `PORT.md` § dangling library refs.
+      slots: { surface: 'library:wood-floorplank1' },
     }) as AnyNode,
   ]
 
