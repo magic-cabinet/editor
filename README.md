@@ -26,9 +26,17 @@ a trusted `resolveIdentity` adapter there instead.
 Docker Desktop is the only prerequisite.
 
 ```bash
-git clone https://github.com/magic-cabinet/editor.git
+git clone --branch dev https://github.com/magic-cabinet/editor.git
 cd editor
-git switch --track origin/magic/pilot-editor-20260727
+docker compose up --build -d
+```
+
+For an existing checkout:
+
+```bash
+git fetch origin
+git switch dev
+git pull --ff-only origin dev
 docker compose up --build -d
 ```
 
