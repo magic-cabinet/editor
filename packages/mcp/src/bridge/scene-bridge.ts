@@ -2,6 +2,7 @@
 import './node-shims'
 
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
+import { nodeRegistry } from '@pascal-app/core/registry'
 import type { AnyNode } from '@pascal-app/core/schema'
 import { type AnyNodeId, AnyNode as AnyNodeSchema, type AnyNodeType } from '@pascal-app/core/schema'
 // Per PLAN §0.6: `useScene` is the DEFAULT export from `@pascal-app/core/store`.
@@ -19,6 +20,17 @@ export type ActiveSceneMeta = Pick<
   SceneMeta,
   'id' | 'name' | 'projectId' | 'ownerId' | 'thumbnailUrl' | 'version'
 >
+
+function schemaForNode(value: unknown) {
+  if (value && typeof value === 'object' && 'type' in value) {
+    const type = (value as { type?: unknown }).type
+    if (typeof type === 'string') {
+      const registered = nodeRegistry.get(type)
+      if (registered) return registered.schema
+    }
+  }
+  return AnyNodeSchema
+}
 
 /**
  * Headless bridge to the `@pascal-app/core` Zustand store.
@@ -331,7 +343,7 @@ export class SceneBridge {
       const p = patches[i]
       if (!p) throw new Error(`invalid patch: patches[${i}] is undefined`)
       if (p.op === 'create') {
-        const res = AnyNodeSchema.safeParse(p.node)
+        const res = schemaForNode(p.node).safeParse(p.node)
         if (!res.success) {
           throw new Error(
             `invalid patch: patches[${i}] create node failed schema: ${res.error.message}`,
@@ -340,8 +352,9 @@ export class SceneBridge {
         if (p.parentId !== undefined && !simAvailable.has(p.parentId)) {
           throw new Error(`invalid patch: patches[${i}] create parentId "${p.parentId}" not found`)
         }
-        parsedCreateNodes.set(i, res.data)
-        simAvailable.add(res.data.id)
+        const parsedNode = res.data as AnyNode
+        parsedCreateNodes.set(i, parsedNode)
+        simAvailable.add(parsedNode.id)
       } else if (p.op === 'update') {
         if (!simAvailable.has(p.id) || simDeleted.has(p.id)) {
           throw new Error(`invalid patch: patches[${i}] update id "${p.id}" not found`)
@@ -452,7 +465,7 @@ export class SceneBridge {
     const errors: ValidationError[] = []
     const nodes = useScene.getState().nodes
     for (const [id, node] of Object.entries(nodes)) {
-      const res = AnyNodeSchema.safeParse(node)
+      const res = schemaForNode(node).safeParse(node)
       if (res.success) continue
       for (const issue of res.error.issues) {
         errors.push({
