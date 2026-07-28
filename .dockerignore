@@ -5,6 +5,8 @@
 **/.next
 **/.turbo
 **/dist
+!packages/magic-cabinet-engine/dist
+!packages/magic-cabinet-engine/dist/**
 **/*.tsbuildinfo
 node_modules
 **/node_modules
