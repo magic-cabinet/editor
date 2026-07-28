@@ -249,7 +249,7 @@ class SceneOperationsFacade implements SceneOperations {
     }
     const scene = await store.load(id)
     if (!scene) return null
-    const editorUrl = scene.editorUrl ?? `/editor/${scene.id}`
+    const editorUrl = scene.editorUrl ?? `/scene/${scene.id}`
     return {
       id: scene.id,
       projectId: scene.projectId ?? scene.id,

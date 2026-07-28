@@ -99,8 +99,8 @@ export class InMemorySceneStore implements SceneStore {
         ownerId: opts.ownerId ?? existing.ownerId,
         sizeBytes: serialized.length,
         nodeCount,
-        editorUrl: existing.editorUrl ?? `/editor/${existing.id}`,
-        url: existing.url ?? `/editor/${existing.id}`,
+        editorUrl: existing.editorUrl ?? `/scene/${existing.id}`,
+        url: existing.url ?? `/scene/${existing.id}`,
         published: true,
         graphHash: computeGraphHash(opts.graph),
         graph: opts.graph,
@@ -129,8 +129,8 @@ export class InMemorySceneStore implements SceneStore {
       ownerId: opts.ownerId ?? null,
       sizeBytes: serialized.length,
       nodeCount,
-      editorUrl: `/editor/${id}`,
-      url: `/editor/${id}`,
+      editorUrl: `/scene/${id}`,
+      url: `/scene/${id}`,
       published: true,
       graphHash: computeGraphHash(opts.graph),
       graph: opts.graph,
@@ -233,7 +233,7 @@ export class InMemorySceneStore implements SceneStore {
     const project = this.projects.get(id)
     const scene = this.data.get(id)
     const now = new Date().toISOString()
-    const editorUrl = `/editor/${id}`
+    const editorUrl = `/scene/${id}`
     return {
       id,
       projectId: id,

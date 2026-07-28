@@ -116,8 +116,8 @@ describe('create_from_template', () => {
       nodeCount: number
     }
     expect(scene.name).toBe('My flat')
-    expect(scene.url).toBe(`/editor/${scene.id}`)
-    expect(scene.editorUrl).toBe(`/editor/${scene.id}`)
+    expect(scene.url).toBe(`/scene/${scene.id}`)
+    expect(scene.editorUrl).toBe(`/scene/${scene.id}`)
     expect(scene.nodeCount).toBeGreaterThan(0)
 
     // Confirm the store actually holds it.
@@ -154,7 +154,7 @@ describe('create_from_template', () => {
     expect(result.isError).toBeFalsy()
     const parsed = parseToolText(result.content as StoredTextContent[])
     expect(typeof parsed.projectId).toBe('string')
-    expect(parsed.editorUrl).toBe(`/editor/${parsed.projectId}`)
+    expect(parsed.editorUrl).toBe(`/scene/${parsed.projectId}`)
     expect(parsed.version).toBe(1)
     expect(parsed.published).toBe(true)
     expect(parsed.nodeCount as number).toBeGreaterThan(0)

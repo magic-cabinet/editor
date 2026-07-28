@@ -14,7 +14,7 @@ export function computeGraphHash(graph: SceneGraph): string {
 }
 
 export function editorUrlFor(meta: Pick<SceneMeta, 'id' | 'editorUrl' | 'url'>): string {
-  return meta.editorUrl ?? meta.url ?? `/editor/${meta.id}`
+  return meta.editorUrl ?? meta.url ?? `/scene/${meta.id}`
 }
 
 export function sceneMetaPayload(meta: SceneMeta, graph?: SceneGraph) {

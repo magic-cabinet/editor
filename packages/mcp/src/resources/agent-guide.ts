@@ -28,7 +28,7 @@ export const AGENT_GUIDE = [
   '',
   '- Use `editorUrl` returned by tools.',
   '- If a tool returns only an id, call `get_project_status` to get the browser URL.',
-  '- Hosted editor URLs use `/editor/<projectId>`.',
+  '- Hosted editor URLs use `/scene/<projectId>`.',
   '',
   '## Scene Creation Rules',
   '',

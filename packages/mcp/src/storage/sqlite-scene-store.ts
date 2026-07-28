@@ -148,7 +148,7 @@ function rowToMeta(row: SceneRow): SceneMeta {
 }
 
 function editorUrlForScene(id: string): string {
-  return `/editor/${id}`
+  return `/scene/${id}`
 }
 
 function hashGraphJson(graphJson: string): string {

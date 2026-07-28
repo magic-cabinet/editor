@@ -19,7 +19,7 @@ export interface SceneMeta {
   ownerId: string | null
   sizeBytes: number
   nodeCount: number
-  /** Browser route agents should return to users. Hosted apps should prefer /editor/<projectId>. */
+  /** Browser route agents should return to users. Hosted apps should prefer /scene/<projectId>. */
   editorUrl?: string
   /** Backward-compatible alias for clients that still read url. */
   url?: string
