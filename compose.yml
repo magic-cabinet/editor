@@ -2,7 +2,6 @@ name: magic-cabinet-dev
 
 services:
   showroom:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile

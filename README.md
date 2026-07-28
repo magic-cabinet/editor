@@ -96,6 +96,13 @@ curl --fail http://127.0.0.1:8080/api/health
 docker compose logs -f showroom
 ```
 
+If the health check returns 404 while `docker compose ps` reports `healthy`,
+another process already holds IPv4 `127.0.0.1:8080`. Docker then binds only the
+IPv6 wildcard, `127.0.0.1` resolves to the other process, and its response is
+what you see. Confirm with `lsof -nP -iTCP:8080 -sTCP:LISTEN`, then set
+`MAGIC_CABINET_PORT` in `.env` to a free port and use it everywhere the
+quickstart says `8080`.
+
 The server exposes seven Magic Cabinet tools:
 
 - `start_magic_kitchen_session`
