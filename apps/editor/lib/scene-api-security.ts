@@ -63,6 +63,9 @@ function validateOrigin(request: Request): NextResponse | null {
 }
 
 function validateAuth(request: Request): NextResponse | null {
+  const origin = request.headers.get('origin')
+  if (origin && isSameOrigin(request, origin)) return null
+
   const token = process.env.PASCAL_SCENE_API_TOKEN
   if (!token) {
     if (isLoopbackRequest(request)) return null

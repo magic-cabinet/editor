@@ -15,7 +15,9 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BuildTab } from './build-tab'
+import { MagicShowroomControls } from './magic-showroom-controls'
 import { CommunityViewerToolbarLeft, CommunityViewerToolbarRight } from './viewer-toolbar'
+import { isMagicCabinetProfile, isSidebarTabVisible } from '@/lib/product-profile'
 
 export interface SceneMeta {
   id: string
@@ -63,7 +65,7 @@ const SIDEBAR_TABS: (SidebarTab & { component: React.ComponentType })[] = [
       />
     ),
   },
-]
+].filter((tab) => isSidebarTabVisible(tab.id))
 
 interface SceneLoaderProps {
   initialScene: SceneGraph
@@ -238,7 +240,12 @@ export function SceneLoader({ initialScene, meta }: SceneLoaderProps) {
         onThumbnailCapture={handleThumb}
         projectId={meta.projectId ?? 'default'}
         sidebarTabs={SIDEBAR_TABS}
-        viewerToolbarLeft={<CommunityViewerToolbarLeft />}
+        viewerToolbarLeft={
+          <div className="flex items-center gap-2">
+            <CommunityViewerToolbarLeft />
+            {isMagicCabinetProfile ? <MagicShowroomControls /> : null}
+          </div>
+        }
         viewerToolbarRight={<CommunityViewerToolbarRight />}
       />
     </div>
