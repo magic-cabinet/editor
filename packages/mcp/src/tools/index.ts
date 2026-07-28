@@ -15,6 +15,7 @@ import { registerExportJson } from './export-json'
 import { registerFindNodes } from './find-nodes'
 import { registerGetNode } from './get-node'
 import { registerGetScene } from './get-scene'
+import { registerMagicKitchenTools } from './magic-kitchen-tools'
 import { registerMeasure } from './measure'
 import { registerPhotoToSceneTool } from './photo-to-scene'
 import { registerPlaceItem } from './place-item'
@@ -43,6 +44,7 @@ export function registerTools(server: McpServer, operations: SceneOperations): v
   registerFindNodes(server, operations)
   registerSceneQueryTools(server, operations)
   registerMeasure(server, operations)
+  registerMagicKitchenTools(server, operations)
   registerConstructionTools(server, operations)
   registerCabinetTools(server, operations)
   registerRoomTools(server, operations)
