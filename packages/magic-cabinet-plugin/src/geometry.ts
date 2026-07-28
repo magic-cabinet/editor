@@ -1,3 +1,4 @@
+import type { GeometryContext } from '@pascal-app/core'
 import {
   BoxGeometry,
   BufferGeometry,
@@ -16,7 +17,9 @@ import {
   type MagicStyleContext,
   magicMaterial,
 } from './materials'
+import { createSlotPainter, type SlotPainter } from './painter'
 import type { MagicCabinetComponentNode, MagicCabinetLayoutNode } from './schema'
+import { slotForMaterialKey } from './slots'
 import { FLOOR_TEXTURES, SHAKER_FRAME } from './style'
 
 const INCH_TO_METER = 0.0254
@@ -97,7 +100,12 @@ export function isEnginePull(
  * children of the door face's own position so the frame follows any facade the
  * engine places, on any wall.
  */
-function addShakerFrame(group: Group, facade: BoxPrimitive, node: MagicCabinetComponentNode): void {
+function addShakerFrame(
+  group: Group,
+  facade: BoxPrimitive,
+  node: MagicCabinetComponentNode,
+  painter: SlotPainter,
+): void {
   const frameWidth = SHAKER_FRAME.frameWidthIn * INCH_TO_METER
   const frameDepth = SHAKER_FRAME.frameDepthIn * INCH_TO_METER
   const [width, height, thickness] = facade.dimensionsM
@@ -113,14 +121,19 @@ function addShakerFrame(group: Group, facade: BoxPrimitive, node: MagicCabinetCo
   ]
 
   for (const [partId, partWidth, partHeight, x, y] of parts) {
-    const part = new Mesh(
-      new BoxGeometry(partWidth, partHeight, thickness + frameDepth),
-      magicMaterial({
-        key: facade.materialKey,
-        explicit: facade.color,
-        style: styleOf(node),
-        size: [partWidth, partHeight],
-      }),
+    // Rails and stiles are the door face, so they paint with it — not with the
+    // carcass their `mdf` key would otherwise route them to.
+    const part = painter.stamp(
+      new Mesh(
+        new BoxGeometry(partWidth, partHeight, thickness + frameDepth),
+        painter.material('front', {
+          key: facade.materialKey,
+          explicit: facade.color,
+          style: styleOf(node),
+          size: [partWidth, partHeight],
+        }),
+      ),
+      'front',
     )
     part.name = `magic-shaker-${partId}`
     // The frame stands proud of the door, which is toward the room — the
@@ -139,6 +152,7 @@ function addPolygonPrimitive(
   group: Group,
   primitive: Extract<MagicCabinetComponentNode['geometry'][number], { kind: 'polygon-prism' }>,
   node: MagicCabinetComponentNode,
+  painter: SlotPainter,
 ): void {
   if (primitive.outlineM.length < 3) return
   const [first, ...rest] = primitive.outlineM
@@ -156,18 +170,22 @@ function addPolygonPrimitive(
     hole.closePath()
     shape.holes.push(hole)
   }
-  const mesh = new Mesh(
-    new ExtrudeGeometry(shape, {
-      bevelEnabled: false,
-      depth: primitive.heightM,
-      steps: 1,
-    }),
-    magicMaterial({
-      key: primitive.materialKey,
-      explicit: primitive.color,
-      style: styleOf(node),
-      size: outlineSize(primitive.outlineM),
-    }),
+  const painted = painter.forKey({
+    key: primitive.materialKey,
+    explicit: primitive.color,
+    style: styleOf(node),
+    size: outlineSize(primitive.outlineM),
+  })
+  const mesh = painter.stamp(
+    new Mesh(
+      new ExtrudeGeometry(shape, {
+        bevelEnabled: false,
+        depth: primitive.heightM,
+        steps: 1,
+      }),
+      painted.material,
+    ),
+    painted.slotId,
   )
   mesh.name = 'magic-polygon-prism'
   mesh.rotation.x = Math.PI / 2
@@ -185,18 +203,22 @@ function outlineSize(outline: readonly (readonly [number, number])[]): [number, 
   ]
 }
 
-export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Group {
+export function buildMagicComponentGeometry(
+  node: MagicCabinetComponentNode,
+  ctx?: GeometryContext,
+): Group {
   const group = new Group()
   group.name = `magic-component:${node.engineComponentId}`
   const frame = frameOf(node)
   const style = styleOf(node)
   const shaker = node.componentKind === 'cabinet' && node.doorStyle === 'shaker'
+  const painter = createSlotPainter(node, ctx)
 
   // A detailed appliance replaces the engine's box rather than covering it —
   // two coincident faces would z-fight, and the engine's dimensions survive
   // regardless: they are the node's `dimensions`, which is what sizes both the
   // footprint used for collision and the appliance drawn here.
-  if (node.applianceDetail && addNativeAppliances(group, node, style)) return group
+  if (node.applianceDetail && addNativeAppliances(group, node, style, painter)) return group
 
   for (const primitive of node.geometry) {
     const isHardware = primitive.materialKey.toLowerCase().includes('hardware')
@@ -212,14 +234,27 @@ export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Gr
       // centre panel back by half of it, so the frame reads as proud.
       const recess = facade ? SHAKER_FRAME.recessDepthIn * INCH_TO_METER : 0
       const depth = primitive.dimensionsM[2] - recess
-      const mesh = new Mesh(
-        new BoxGeometry(primitive.dimensionsM[0], primitive.dimensionsM[1], depth),
-        magicMaterial({
-          key: primitive.materialKey,
-          explicit: primitive.color,
-          style,
-          size: [primitive.dimensionsM[0], primitive.dimensionsM[1]],
-        }),
+      // A door face and a carcass side are both `mdf`/`plywood` to the engine,
+      // which names materials by what they're made of. Which one the user is
+      // painting is a geometry question, so it's decided here — everything
+      // else routes off the key.
+      // Read the key up front: `isCabinetFacade` is a type guard, and inside
+      // the `kind === 'box'` branch its false arm narrows to `never`.
+      const materialKey = primitive.materialKey
+      const slotId = isCabinetFacade(primitive, frame)
+        ? ('front' as const)
+        : slotForMaterialKey(materialKey)
+      const mesh = painter.stamp(
+        new Mesh(
+          new BoxGeometry(primitive.dimensionsM[0], primitive.dimensionsM[1], depth),
+          painter.material(slotId, {
+            key: primitive.materialKey,
+            explicit: primitive.color,
+            style,
+            size: [primitive.dimensionsM[0], primitive.dimensionsM[1]],
+          }),
+        ),
+        slotId,
       )
       mesh.name = `magic-box:${primitive.materialKey}`
       mesh.position.set(
@@ -229,21 +264,23 @@ export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Gr
       )
       mesh.rotation.set(...primitive.rotationRad)
       group.add(mesh)
-      if (facade) addShakerFrame(group, primitive, node)
+      if (facade) addShakerFrame(group, primitive, node, painter)
       continue
     }
     if (primitive.kind === 'polygon-prism') {
-      addPolygonPrimitive(group, primitive, node)
+      addPolygonPrimitive(group, primitive, node, painter)
       continue
     }
     const geometry = new BufferGeometry()
     geometry.setAttribute('position', new Float32BufferAttribute(primitive.positionsM, 3))
     geometry.setIndex(primitive.indices)
     geometry.computeVertexNormals()
-    const mesh = new Mesh(
-      geometry,
-      magicMaterial({ key: primitive.materialKey, explicit: primitive.color, style }),
-    )
+    const painted = painter.forKey({
+      key: primitive.materialKey,
+      explicit: primitive.color,
+      style,
+    })
+    const mesh = painter.stamp(new Mesh(geometry, painted.material), painted.slotId)
     mesh.name = `magic-triangle-mesh:${primitive.materialKey}`
     mesh.position.set(...primitive.positionM)
     mesh.rotation.set(...primitive.rotationRad)
@@ -254,16 +291,17 @@ export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Gr
     node.componentKind === 'cabinet' &&
     (node.handleStyle === 'knob' || node.handleStyle === 'edge')
   ) {
-    const handle =
+    const hardware = painter.material('hardware', {
+      key: 'hardware',
+      explicit: '#202124',
+      style,
+    })
+    const handle = painter.stamp(
       node.handleStyle === 'knob'
-        ? new Mesh(
-            new SphereGeometry(0.026, 14, 10),
-            magicMaterial({ key: 'hardware', explicit: '#202124', style }),
-          )
-        : new Mesh(
-            new BoxGeometry(Math.max(0.12, frame.width * 0.62), 0.018, 0.024),
-            magicMaterial({ key: 'hardware', explicit: '#202124', style }),
-          )
+        ? new Mesh(new SphereGeometry(0.026, 14, 10), hardware)
+        : new Mesh(new BoxGeometry(Math.max(0.12, frame.width * 0.62), 0.018, 0.024), hardware),
+      'hardware',
+    )
     handle.name = `magic-${node.handleStyle}-handle`
     // Corner-anchored frame: centre is `width / 2`, and the room-facing side
     // is `-depth`. The knob sits off-centre toward the opening edge.

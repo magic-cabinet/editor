@@ -63,9 +63,40 @@ the plugin's node definitions cannot bundle it. For the same reason server code 
 
 **3. The MVP's materials, on Pascal's geometry.** Pascal's builders take a plain
 `Record<slotId, Material>`, so `magicSlotMaterials()` hands them the ported Babylon
-finishes instead of Pascal's `library:*` presets. This is also the only compliant route:
-Plugin API v1 does not let a plugin add types to Pascal's global material store, but
-nothing stops it building its own three.js materials.
+finishes instead of Pascal's `library:*` presets. Plugin API v1 does not let a plugin add
+types to Pascal's global material store, but nothing stops it building its own three.js
+materials.
+
+## Paint mode
+
+The ported finishes are the *default*, not the ceiling. Every component declares
+`capabilities.slots` + `capabilities.paint`, so Pascal's own painter repaints an MC
+kitchen surface by surface. `selection-manager.tsx` dispatches purely through
+`nodeRegistry.get(node.type)?.capabilities?.paint` — no kind allowlist — which is why a
+plugin node participates on the same terms as a built-in cabinet.
+
+Three pieces make it work, and the second is the one that buys the most:
+
+- **`slots.ts` uses Pascal's slot ids, not a new vocabulary.** The painter resolves a
+  click through `hitObject.userData.slotId`, and the appliance builders in
+  `@pascal-app/nodes/cabinet-geometry` already stamp their meshes with those ids
+  (`stampSlot`). Sharing the set means the inside of a fridge is paintable without the
+  plugin walking a subtree it never assembled. What is *not* adopted is
+  `cabinetSlots()`'s `library:*` defaults — those render a Pascal-looking kitchen.
+- **`slotForMaterialKey`** translates the engine's manufacturing vocabulary
+  (`cabinet-panel:mdf`, `countertop:quartz`) into a painting one. Door fronts are the one
+  case the key can't decide — an `mdf` panel is a door or a carcass side depending on
+  where it sits — so `geometry.ts` decides those from `isCabinetFacade`.
+- **`painter.ts`** resolves `node.slots[slotId]` against `ctx.materials`, which
+  `GeometrySystem` populates for exactly this purpose (see the field's doc comment in
+  `core/registry/types.ts`). All three `MaterialRef` forms resolve: `library:<id>`,
+  `scene:<id>`, and bare `#rrggbb` — the last needs handling of its own, because
+  `resolveMaterialRef` parses only the two prefixed forms. A dangling ref falls back to
+  the ported finish, so deleting a scene material is safe.
+
+Verified live: `PUT /api/scenes/:id` writing `slots: {front: '#1f6feb'}` onto the pilot's
+14 cabinets turned every door blue and left carcass, countertop, backsplash, cooktop
+glass and sink basins untouched.
 
 ## Frames — the part that keeps producing invisible bugs
 
@@ -103,6 +134,10 @@ well-typed, validator-green, and wrong.
   `null` headless and the material keeps its colour and PBR constants.
 - `parametrics.test.ts` — asserts the layout→component style push-down fires for mirrored
   fields and does **not** fire for layout-only ones.
+- `painter.test.ts` — asserts every emitted mesh carries a slot id (an unstamped mesh is
+  invisible to paint mode, with no error), that a door face and its carcass side land on
+  different slots, and that all three `MaterialRef` forms resolve. Verified against two
+  negative controls: removing the stamp fails three tests, ignoring the override fails one.
 
 ## Still not ported
 

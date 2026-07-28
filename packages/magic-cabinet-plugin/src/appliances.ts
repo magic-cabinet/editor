@@ -13,7 +13,9 @@ import {
 } from '@pascal-app/nodes/cabinet-geometry'
 import { Group, type Material } from 'three'
 import { type MagicStyleContext, magicMaterial } from './materials'
+import type { SlotPainter } from './painter'
 import type { MagicCabinetComponentNode } from './schema'
+import type { MagicSlotId } from './slots'
 
 /**
  * The Babylon designer draws appliances from GLB models
@@ -180,17 +182,29 @@ const SLOT_COLORS: Partial<Record<CabinetSlotId, string>> = {
 /**
  * The seam where the MVP's look meets Pascal's geometry: the builders take a
  * plain `Record<slotId, Material>`, so they render with the ported Babylon
- * finishes rather than Pascal's own `library:*` presets. Plugin API v1 cannot
- * add materials to Pascal's global store anyway — building them locally is
- * both the compliant route and the faithful one.
+ * finishes rather than Pascal's own `library:*` presets.
+ *
+ * With a `painter`, a slot the user has painted resolves through
+ * `node.slots` first — which is what makes the interior of a native appliance
+ * repaintable. The builders stamp their own meshes with these same slot ids
+ * (`stampSlot`), so the painter can read a hit off a fridge liner or a hob
+ * without the plugin ever walking a subtree it did not build.
  */
-export function magicSlotMaterials(style: MagicStyleContext): CabinetSlotMaterials {
+export function magicSlotMaterials(
+  style: MagicStyleContext,
+  painter?: SlotPainter,
+): CabinetSlotMaterials {
   const entries = Object.entries(SLOT_MATERIAL_KEYS) as [CabinetSlotId, string][]
   return Object.fromEntries(
-    entries.map(([slotId, key]) => [
-      slotId,
-      magicMaterial({ key, explicit: SLOT_COLORS[slotId], style }),
-    ]),
+    entries.map(([slotId, key]) => {
+      const request = { key, explicit: SLOT_COLORS[slotId], style }
+      // The two slot vocabularies are the same set by construction — see
+      // `slots.ts` — so the cast is a naming formality, not a mapping.
+      return [
+        slotId,
+        painter ? painter.material(slotId as MagicSlotId, request) : magicMaterial(request),
+      ]
+    }),
   ) as unknown as Record<CabinetSlotId, Material>
 }
 
@@ -202,12 +216,13 @@ export function addNativeAppliances(
   group: Group,
   node: MagicCabinetComponentNode,
   style: MagicStyleContext,
+  painter?: SlotPainter,
 ): boolean {
   const appliances = nativeAppliancesFor(node)
   if (appliances.length === 0) return false
 
   const cabinet = asCabinetNode(node)
-  const materials = magicSlotMaterials(style)
+  const materials = magicSlotMaterials(style, painter)
   const frame = nativeFrame(node)
   const [width, height, depth] = node.dimensions
 

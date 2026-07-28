@@ -139,5 +139,16 @@ export const MagicCabinetComponentNode = BaseNode.extend({
   finish: z.enum(['sage', 'oak', 'quartz', 'black', 'white']).default('sage'),
   handleStyle: z.enum(['bar', 'knob', 'edge', 'none']).default('bar'),
   ...MagicKitchenStyle,
+  /**
+   * Per-surface paint overrides, `slotId → MaterialRef`. Written by Pascal's
+   * own painter through `capabilities.paint`, and resolved in `def.geometry`
+   * against `ctx.materials` — a `scene:<id>` material the painter minted, a
+   * `library:<id>` catalog finish, or a flat `#rrggbb`.
+   *
+   * Absent by default, and an absent or dangling slot falls back to the
+   * ported MVP finish. So the kitchen still ships looking like Magic Cabinet;
+   * this only records where a human disagreed. See `slots.ts`.
+   */
+  slots: z.record(z.string(), z.string()).optional(),
 })
 export type MagicCabinetComponentNode = z.infer<typeof MagicCabinetComponentNode>

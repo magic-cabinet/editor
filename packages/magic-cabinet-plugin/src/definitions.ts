@@ -1,12 +1,14 @@
 import type { AnyNodeDefinition, HandleDescriptor, NodeDefinition } from '@pascal-app/core'
 import { buildMagicComponentFloorplan, buildMagicLayoutFloorplan } from './floorplan'
 import { buildMagicComponentGeometry, buildMagicLayoutGeometry } from './geometry'
+import { magicCabinetPaint } from './paint'
 import { magicCabinetComponentParametrics, magicCabinetLayoutParametrics } from './parametrics'
 import {
   MagicCabinetComponentNode,
   type MagicCabinetComponentNode as MagicCabinetComponentNodeType,
   MagicCabinetLayoutNode,
 } from './schema'
+import { magicCabinetSlots } from './slots'
 
 const componentMoveHandle: HandleDescriptor<MagicCabinetComponentNodeType> = {
   kind: 'tap-action',
@@ -151,6 +153,10 @@ export const magicCabinetComponentDefinition: NodeDefinition<typeof MagicCabinet
       },
       collides: true,
     },
+    // Paint mode. The slot ids are Pascal's own, so the native appliance
+    // meshes inside a component are paintable through the same declaration.
+    paint: magicCabinetPaint,
+    slots: () => magicCabinetSlots(),
   },
   handles: [componentMoveHandle, componentRotateHandle],
   geometry: buildMagicComponentGeometry,

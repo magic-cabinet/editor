@@ -15,6 +15,11 @@
       "types": "./dist/cabinet/geometry-kit.d.ts",
       "import": "./dist/cabinet/geometry-kit.js",
       "default": "./dist/cabinet/geometry-kit.js"
+    },
+    "./slot-paint": {
+      "types": "./dist/shared/slot-paint.d.ts",
+      "import": "./dist/shared/slot-paint.js",
+      "default": "./dist/shared/slot-paint.js"
     }
   },
   "files": [
