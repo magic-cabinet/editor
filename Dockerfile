@@ -36,7 +36,6 @@ ENV PASCAL_DATA_DIR=/data
 ENV PORT=8080
 
 EXPOSE 8080
-VOLUME ["/data"]
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
   CMD curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null || exit 1
