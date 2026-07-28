@@ -96,7 +96,7 @@ describe('SqliteSceneStore', () => {
   })
 
   test('round-trips a saved scene through a reopened database', async () => {
-    const graph = makeGraph()
+    const graph = makeGraph({ installedPlugins: ['magic-cabinet:pilot'] })
     const saved = await store.save({ id: 'kitchen', name: 'Kitchen', graph })
 
     expect(saved.id).toBe('kitchen')
