@@ -183,12 +183,101 @@ describe('Magic Kitchen House pilot', () => {
     ) as unknown as { width: number; engineResult: unknown; activePresentation: string }
 
     expect(scene.installedPlugins).toEqual(['magic-cabinet:pilot'])
-    expect(layout.width).toBeCloseTo(4.1, 1)
+    // 120 in — the Babylon MVP's DEFAULT_FLOORPLAN, not the engine's 410 cm bench.
+    expect(layout.width).toBeCloseTo(3.048, 3)
     expect(layout.engineResult).toBeTruthy()
     expect(layout.activePresentation).toBe('hero')
     expect(
       nodes.filter((node) => (node as { type: string }).type === 'magic-cabinet:component').length,
     ).toBeGreaterThan(30)
+  })
+
+  /**
+   * The shipped scene is the MVP's default mount, which is an L — two runs plus
+   * an island. The one-wall pilot bench emitted none of these three subtypes, so
+   * each assertion below fails on the input we shipped before the swap.
+   */
+  test('ships the Babylon default kitchen, not the engine bench', () => {
+    const subtypes = Object.values(createMagicKitchenPilotScene().nodes)
+      .filter((node) => (node as { type: string }).type === 'magic-cabinet:component')
+      .map((node) => (node as unknown as MagicCabinetComponentNode).subtype)
+
+    expect(subtypes).toContain('corner-base')
+    expect(subtypes).toContain('corner-wall')
+    expect(subtypes).toContain('island-panel')
+
+    // Control: the bench reaches none of them, so this isn't asserting a constant.
+    const bench = adaptKitchenResult(generateKitchen(PILOT_KITCHEN_INPUT), {
+      parentId: 'level_test',
+      roomOrigin: [-5.45, 0.05, -0.7],
+    }).components.map((component) => component.subtype)
+    expect(bench).not.toContain('corner-base')
+    expect(bench).not.toContain('island-panel')
+  })
+
+  /**
+   * The kitchen zone is `x -6…-0.8, z -4.5…-0.7` (`house-shell.ts`). A one-wall
+   * run only had to meet one wall and could centre its width; an L has to meet
+   * two, so `roomOrigin` is derived rather than nudged and this pins the result.
+   *
+   * Measured from the rendered primitives — component position, component yaw,
+   * then the primitive's own local transform. An axis-aligned read of
+   * `dimensions` is wrong here: every east-wall component is yawed 270°, so its
+   * width and depth are swapped and the box reads ~0.45 m past the wall it is
+   * actually flush against.
+   */
+  test('seats the L flush into the kitchen zone north-east corner', () => {
+    const zone = { minX: -6.0, maxX: -0.8, minZ: -4.5, maxZ: -0.7 }
+    const box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity }
+
+    for (const node of Object.values(createMagicKitchenPilotScene().nodes)) {
+      if ((node as { type: string }).type !== 'magic-cabinet:component') continue
+      const component = node as unknown as MagicCabinetComponentNode
+      const [px, , pz] = component.position
+      const yaw = component.rotation[1]
+      const emit = (lx: number, lz: number) => {
+        const x = px + lx * Math.cos(yaw) + lz * Math.sin(yaw)
+        const z = pz - lx * Math.sin(yaw) + lz * Math.cos(yaw)
+        box.minX = Math.min(box.minX, x)
+        box.maxX = Math.max(box.maxX, x)
+        box.minZ = Math.min(box.minZ, z)
+        box.maxZ = Math.max(box.maxZ, z)
+      }
+      for (const primitive of component.geometry) {
+        if (primitive.kind === 'box') {
+          const [dx, , dz] = primitive.dimensionsM
+          const [ox, , oz] = primitive.positionM
+          const theta = primitive.rotationRad[1]
+          for (const sx of [-0.5, 0.5]) {
+            for (const sz of [-0.5, 0.5]) {
+              emit(
+                ox + sx * dx * Math.cos(theta) + sz * dz * Math.sin(theta),
+                oz - sx * dx * Math.sin(theta) + sz * dz * Math.cos(theta),
+              )
+            }
+          }
+        } else if (primitive.kind === 'polygon-prism') {
+          for (const [x, z] of primitive.outlineM) emit(x, z)
+        } else {
+          for (let i = 0; i < primitive.positionsM.length; i += 3) {
+            emit(primitive.positionsM[i] ?? 0, primitive.positionsM[i + 2] ?? 0)
+          }
+        }
+      }
+    }
+
+    expect(Number.isFinite(box.minX)).toBe(true)
+
+    // Nothing crosses a wall of the room it lives in.
+    expect(box.minX).toBeGreaterThanOrEqual(zone.minX)
+    expect(box.maxX).toBeLessThanOrEqual(zone.maxX + 1e-9)
+    expect(box.minZ).toBeGreaterThanOrEqual(zone.minZ - 1e-9)
+    expect(box.maxZ).toBeLessThanOrEqual(zone.maxZ)
+
+    // And both runs actually reach their wall — an origin that merely fits
+    // inside the zone passes the four bounds above but fails these two.
+    expect(box.maxX).toBeCloseTo(zone.maxX, 3)
+    expect(box.minZ).toBeCloseTo(zone.minZ, 3)
   })
 
   /**
