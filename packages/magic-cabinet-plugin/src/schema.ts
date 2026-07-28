@@ -18,6 +18,13 @@ const BoxPrimitive = z.object({
   rotationRad: Rotation,
   materialKey: z.string(),
   color: z.string().optional(),
+  /**
+   * The engine's own panel id (`cabinet-north-7-panel-6-door`), when the
+   * primitive came from a cabinet. It is what the MVP classifies doors by —
+   * see `panel-classification.ts`. Optional because only cabinet components
+   * carry panels; trim, countertops and appliances have none.
+   */
+  panelId: z.string().optional(),
 })
 
 const PolygonPrismPrimitive = z.object({
@@ -55,7 +62,7 @@ export type MagicGeometryPrimitive = z.infer<typeof MagicGeometryPrimitive>
  * components in the same gesture — see `parametrics.ts`.
  */
 export const MagicKitchenStyle = {
-  doorStyle: z.enum(DOOR_STYLES).default('slab'),
+  doorStyle: z.enum(DOOR_STYLES).default('shaker'),
   cabinetTexture: z.enum(CABINET_TEXTURES).default('none'),
   countertopMaterial: z.enum(COUNTERTOP_MATERIALS).default('quartz'),
   /**
@@ -65,6 +72,18 @@ export const MagicKitchenStyle = {
    * authoritative either way, they are what size the appliance.
    */
   applianceDetail: z.boolean().default(true),
+  /**
+   * Crown molding and ceiling fillers are *renderer* state in the MVP, not
+   * solver state: the engine emits them unconditionally (20 of the default
+   * kitchen's 55 components) and the designer decides whether to draw them.
+   * `DesignerCanvas.tsx:298-300` passes `crownMoldingEnabled={style !== "none"}`
+   * and `ceilingFillersEnabled` straight through, and the default style
+   * (`design-generation.ts:46-47`) turns both off. Pascal drew all 20 because
+   * it had no such switch — the stepped trim capping every wall run in the
+   * showroom frame is these, and the Babylon default has none of it.
+   */
+  crownMoldingEnabled: z.boolean().default(false),
+  ceilingFillersEnabled: z.boolean().default(false),
 } as const
 
 export const MagicCatalogIdentity = z.object({
@@ -104,7 +123,10 @@ export const MagicCabinetLayoutNode = BaseNode.extend({
   // marked dirty, so reading these off the layout would not rebuild).
   ...MagicKitchenStyle,
   floorType: z.enum(FLOOR_TYPES).default('hardwood'),
-  backsplashMaterial: z.enum(BACKSPLASH_MATERIALS).default('white-metro-tile'),
+  // MVP default is `"none"` (`design-generation.ts:45`), which the designer
+  // reads as `backsplashVisible = false`. Tiling the wall by default put a
+  // metro-tile splash behind the sink that the Babylon default never draws.
+  backsplashMaterial: z.enum(BACKSPLASH_MATERIALS).default('none'),
 })
 export type MagicCabinetLayoutNode = z.infer<typeof MagicCabinetLayoutNode>
 

@@ -18,6 +18,7 @@ import {
   magicMaterial,
 } from './materials'
 import { createSlotPainter, type SlotPainter } from './painter'
+import { isPullPanel, isShakerFacadePanel } from './panel-classification'
 import type { MagicCabinetComponentNode, MagicCabinetLayoutNode } from './schema'
 import { slotForMaterialKey } from './slots'
 import { FLOOR_TEXTURES, SHAKER_FRAME } from './style'
@@ -64,10 +65,18 @@ function isFrontOfCarcass(primitive: BoxPrimitive, frame: ComponentFrame): boole
 }
 
 /**
- * Door and drawer fronts. The engine names them `cabinet-panel:mdf` (carcass
- * panels are `plywood`, backs are `back_panel`) and builds them 3/4" thick at
- * the front plane — the same distinction the MVP draws by panel id in
- * `isShakerFacadePanel`, which Pascal does not receive.
+ * Door and drawer fronts.
+ *
+ * The MVP decides this by panel id (`isShakerFacadePanel`), and the adapter now
+ * carries those ids through, so when one is present it is authoritative — the
+ * two renderers then agree by construction rather than by coincidence.
+ *
+ * The geometric test below is the fallback for primitives with no panel id
+ * (trim, countertops, island panels — nothing the engine gives a panel list).
+ * It is not a reliable stand-in for the id: `frontReach` measures along the
+ * component's own z axis and so misreads any yawed panel, which is exactly
+ * what a diagonal corner door is. Kept because it is strictly better than
+ * treating an id-less mdf panel as carcass, not because it is equivalent.
  */
 export function isCabinetFacade(
   primitive: MagicCabinetComponentNode['geometry'][number],
@@ -76,6 +85,7 @@ export function isCabinetFacade(
   if (primitive.kind !== 'box') return false
   if (!primitive.materialKey.toLowerCase().includes('mdf')) return false
   if (Math.abs(primitive.dimensionsM[2] - FACADE_THICKNESS_M) > THICKNESS_TOLERANCE_M) return false
+  if (primitive.panelId !== undefined) return isShakerFacadePanel(primitive.panelId)
   return isFrontOfCarcass(primitive, frame)
 }
 
@@ -90,6 +100,7 @@ export function isEnginePull(
 ): primitive is BoxPrimitive {
   if (primitive.kind !== 'box') return false
   if (!primitive.materialKey.toLowerCase().includes('mdf')) return false
+  if (primitive.panelId !== undefined) return isPullPanel(primitive.panelId)
   if (primitive.dimensionsM[2] >= FACADE_THICKNESS_M - THICKNESS_TOLERANCE_M) return false
   return frontReach(primitive) > frame.depth + FRONT_PLANE_TOLERANCE_M
 }
@@ -193,6 +204,21 @@ function addPolygonPrimitive(
   group.add(mesh)
 }
 
+/**
+ * Whether a trim component is drawn at all.
+ *
+ * The engine emits crown molding and ceiling fillers for every wall run
+ * regardless of style — 20 of the default kitchen's 55 components — because
+ * they are geometry, not taste. Which of them a design actually wants is the
+ * designer's call, and the MVP default wants neither
+ * (`design-generation.ts:46-47`).
+ */
+export function isTrimVisible(node: MagicCabinetComponentNode): boolean {
+  if (node.subtype === 'crown-molding') return node.crownMoldingEnabled
+  if (node.subtype === 'ceiling-filler') return node.ceilingFillersEnabled
+  return true
+}
+
 /** Bounding size of a plan outline, for the size-driven UV scale. */
 function outlineSize(outline: readonly (readonly [number, number])[]): [number, number] {
   const xs = outline.map((point) => point[0])
@@ -213,6 +239,13 @@ export function buildMagicComponentGeometry(
   const style = styleOf(node)
   const shaker = node.componentKind === 'cabinet' && node.doorStyle === 'shaker'
   const painter = createSlotPainter(node, ctx)
+
+  // Suppressed trim stays a node — it is still in the engine result and still
+  // on the BOM, and flipping the switch back on is a re-render, not a re-solve.
+  // That is the MVP's own shape: `KitchenAssembly` keeps `crownMolding` and
+  // `ceilingFillerPanels` in config and gates them at draw time
+  // (`KitchenAssembly.tsx:1441`).
+  if (!isTrimVisible(node)) return group
 
   // A detailed appliance replaces the engine's box rather than covering it —
   // two coincident faces would z-fight, and the engine's dimensions survive

@@ -210,10 +210,106 @@ well-typed, validator-green, and wrong.
   override fails one. It also pins the hex divergence against upstream's own behaviour,
   so the workaround is self-retiring.
 
+## Panel ids decide facades, not geometry
+
+`isCabinetFacade` used to answer "is this a door" from geometry: 3/4" `mdf` reaching the
+carcass front plane. That is wrong on two panels the engine actually emits, and this entry
+exists because the wrong version shipped.
+
+`frontReach` measures along the component's own z axis, so it misreads any *yawed*
+primitive. A diagonal corner door is yawed 45°:
+
+```
+corner-base  cabinet-north-7-panel-6-door   yaw −45°   axis reach 0.4735 m   carcass depth 0.6096 m  -> FAIL
+corner-wall  cabinet-north-8-panel-6-door   yaw −45°   axis reach 0.4735 m   carcass depth 0.3048 m  -> pass
+```
+
+Identical panel, identical numbers, opposite verdicts — the corner-wall's *pass* was
+decided entirely by the nominal depth it happened to be compared against, so the test was
+never measuring what it claimed. The base-corner door rendered as a flat slab, took no
+shaker frame, and painted as carcass in the default view.
+
+The MVP never had this problem because it classifies by panel id
+(`apps/web/src/lib/render/panel-classification.ts`, ported verbatim to
+`panel-classification.ts`), and those ids **are** reachable from Pascal — at
+`engineState.scene.cabinets[].panels[].id`. An earlier comment here claimed Pascal does
+not receive them. It does. `adaptKitchenResult` now carries `panelId` onto each box
+primitive and the classifier prefers it.
+
+Two caveats worth keeping in view:
+
+- **The read is into declared-opaque state.** `KitchenEngineState.scene` is typed
+  `unknown` and documented "consumers must round-trip it", so `panelIdsByComponent` only
+  claims a mapping when the cabinet's panel list matches the component's primitive list
+  one-for-one, and yields nothing otherwise. Verified across all four layouts:
+  `len-mismatch=0`, `dim-mismatch=0`. `corner-facade.test.ts` fails loudly if that shape
+  ever moves — renaming the key drops 13 of 15 tests rather than degrading in silence.
+  The real fix belongs upstream: put `panelId` on the public `BoxGeometry` and delete
+  `panelIdsByComponent`.
+- **It changed the sink tilt-front too.** `…-panel-5-tilt-front` sits exactly at the front
+  plane in 3/4" mdf and is geometrically indistinguishable from a drawer face, but the MVP
+  does not shaker-frame it. We now match. No public-contract heuristic could have.
+
+Fillers and drawer pulls were already classified correctly and still are.
+
+## The default kitchen wears the designer's default style, not ours
+
+Porting the geometry correctly is not the same as shipping the same kitchen. Every knob
+below was a *default* that had drifted onto this plugin's own showroom palette, and
+together they are most of what made the Pascal scene unrecognisable next to
+`dev.magiccabinetai.com`. Ground truth is `DEFAULT_DESIGN_STYLE`
+(`mvp` `apps/web/src/lib/simple-designer/design-generation.ts:39-49`).
+
+| | MVP default | was | now |
+|---|---|---|---|
+| cabinet colour | `white` `#f5f5f0` | `sage` walls, `oak` bases | `white` |
+| `doorStyle` | `shaker` | `slab` | `shaker` |
+| `crownMoldingStyle` | `none` → not drawn | drawn | `crownMoldingEnabled: false` |
+| ceiling fillers | `false` → not drawn | drawn | `ceilingFillersEnabled: false` |
+| `backsplashMaterial` | `none` | `white-metro-tile` | `none` |
+
+Two of these are worth more than a table row.
+
+**Crown molding and ceiling fillers are renderer state, not solver state.** The engine
+emits them for every wall run regardless — 20 of the default kitchen's 55 components — and
+the designer decides whether to draw them (`DesignerCanvas.tsx:298-300`). Drawing all of
+them put stepped trim on top of every cabinet run in a scene whose reference has none.
+They stay nodes when suppressed, so the engine result and the BOM are untouched and
+turning them back on is a re-render rather than a re-solve.
+
+**`finish` was inert for everything visible.** `materialColor` scanned the material key
+for a token before consulting the finish, and the engine names cabinet parts
+`cabinet-panel:mdf` / `panel:mdf` / `trim:mdf` — so `cabinet`, `panel` and `trim` each
+matched a generic grey first and every door came out sage whatever the finish said. Only
+the texture half of the finish (wood grain vs paint) responded, which is why bases read as
+espresso. A surface that takes the body finish now asks the finish first; the token scan
+still owns the surfaces the MVP excludes from `takesBodyColor` (glass, hardware,
+appliance). Setting the palette alone would not have fixed the colour.
+
+## Appliances: the box is the budget, and an opening is an appliance
+
+- **The hood ran 1.7 m through the ceiling.** `addRangeHoodCompartment` sizes its flue from
+  `resolveHoodDuctTopY`, which walks the scene for the real wall height — but the plugin
+  synthesizes its cabinet node and has no `GeometryContext` to give it, so it fell back to
+  `DEFAULT_CEILING_HEIGHT` measured from the component's *own* origin: a 2.5 m flue on a
+  hood already 1.7 m up. The synthesized node now carries the y offset that makes the
+  resolver return the component height, so the hood occupies exactly the 30x30x20in box the
+  engine gave it — for any ceiling, not just this one.
+- **An `appliance-opening` carries no geometry of its own.** `nativeAppliancesFor` gated on
+  `componentKind === 'appliance'`, so the opening was not diverted to a native builder —
+  and because an opening has no engine primitives either, that did not fall back to a box,
+  it drew nothing. The default kitchen shipped with no dishwasher. The MVP makes no such
+  distinction: `applianceAssetManifest(appliances, applianceOpenings)` models both lists.
+
+`positionIn.y` is the component's **bottom**, not its centre — the wall cabinets settle it
+(54in + 30in tall renders to 2.184 m, its top). The engine's *primitives* are centred about
+that origin, which is why reading raw primitive extents suggests the range and fridge sit
+half below the floor. They do not; the native builders bottom-anchor correctly.
+
 ## Still not ported
 
 - `wine-cooler` and `trash-compactor` have no Pascal compartment; they keep the engine's
-  box. So do `wine-rack` and the blind-vs-diagonal corner discriminator.
+  box. So does `wine-rack`.
 - Assembly animation and quality tiers (SSAO, reflection probes, shadow tuning) — the
   host renderer's job, not the plugin's.
 - `def.tool` / `def.preview`: no hand placement yet. The engine is the placement

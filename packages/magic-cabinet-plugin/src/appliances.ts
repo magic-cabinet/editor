@@ -9,13 +9,22 @@ import {
   addSinkCompartment,
   type CabinetSlotId,
   type CabinetSlotMaterials,
+  DEFAULT_CEILING_HEIGHT,
   sinkBowls,
 } from '@pascal-app/nodes/cabinet-geometry'
+
 import { Group, type Material } from 'three'
 import { type MagicStyleContext, magicMaterial } from './materials'
 import type { SlotPainter } from './painter'
 import type { MagicCabinetComponentNode } from './schema'
 import type { MagicSlotId } from './slots'
+
+/**
+ * How much of the hood's box the angled canopy takes; the flue fills the rest.
+ * Chosen to read as a chimney hood, not measured off the MVP — the engine
+ * gives the hood one undivided box, so nothing upstream fixes the split.
+ */
+const HOOD_CANOPY_FRACTION = 0.45
 
 /**
  * The Babylon designer draws appliances from GLB models
@@ -69,7 +78,12 @@ const RANGE: NativeAppliance[] = [
 
 export function nativeAppliancesFor(node: MagicCabinetComponentNode): NativeAppliance[] {
   const subtype = node.subtype.toLowerCase()
-  if (node.componentKind === 'appliance') {
+  // An `appliance-opening` is a reserved gap — the engine gives it dimensions
+  // but no geometry of its own, so gating on `appliance` alone drew nothing at
+  // all where the dishwasher goes. The MVP does not make that distinction
+  // either: `applianceAssetManifest(appliances, applianceOpenings)`
+  // (`KitchenAssembly.tsx:210`) takes both lists and models both.
+  if (node.componentKind === 'appliance' || node.componentKind === 'appliance-opening') {
     if (subtype === 'refrigerator') return [{ kind: 'fridge', compartment: fridgeKind(node) }]
     if (subtype === 'range') return RANGE
     if (subtype === 'dishwasher') return [{ kind: 'dishwasher' }]
@@ -118,7 +132,19 @@ function asCabinetNode(node: MagicCabinetComponentNode): CabinetModuleNode {
     name: node.subtype,
     visible: true,
     metadata: {},
-    position: [0, 0, 0],
+    // Only the hood reads this, and it reads it as "how far below the ceiling
+    // am I" — `resolveHoodDuctTopY` returns `DEFAULT_CEILING_HEIGHT - y` and
+    // runs the flue up to it. That resolver normally walks the scene for the
+    // real wall height, but a synthesized node has no parent and the plugin
+    // has no `GeometryContext` to give it, so it fell back to the 2.5 m
+    // default measured from the component's *own* origin — a flue 2.5 m above
+    // a hood already 1.7 m up, i.e. 1.7 m through the ceiling.
+    //
+    // The engine's box is authoritative for every appliance (the MVP's own
+    // rule, quoted at the top of this file), and for the hood that box is a
+    // plain 30x30x20in. So pin the resolver to return exactly the component
+    // height and the whole hood lands inside it.
+    position: [0, DEFAULT_CEILING_HEIGHT - height, 0],
     rotation: 0,
     width,
     depth,
@@ -287,13 +313,17 @@ export function addNativeAppliances(
         )
         break
       case 'hood':
+        // The canopy takes the lower part of the box and the flue fills the
+        // rest, so the two together are exactly the engine's 30in. Passing the
+        // full height instead made the canopy alone fill the box and left the
+        // flue with nowhere to go but through the ceiling.
         addRangeHoodCompartment(
           frame,
           cabinet,
           materials,
           appliance.compartment,
           0,
-          height,
+          height * HOOD_CANOPY_FRACTION,
           undefined,
           index,
         )

@@ -36,3 +36,6 @@ export type {
   CabinetFridgeCompartmentType,
   CabinetHoodCompartmentType,
 } from './stack'
+// The hood's flue is sized against this, so a caller that synthesizes a node
+// (rather than resolving one from the scene) has to be able to read it.
+export { DEFAULT_CEILING_HEIGHT } from './stack'

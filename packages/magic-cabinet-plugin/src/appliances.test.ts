@@ -4,6 +4,7 @@ import { Box3, Group, Vector3 } from 'three'
 import { adaptKitchenResult } from './adapter'
 import { addNativeAppliances, nativeAppliancesFor } from './appliances'
 import { buildMagicComponentGeometry } from './geometry'
+import { MAGIC_KITCHEN_DEFAULT_INPUT } from './house'
 import type { MagicCabinetComponentNode } from './schema'
 
 const STYLE = { finish: 'sage', cabinetTexture: 'none', countertopMaterial: 'quartz' } as const
@@ -168,10 +169,39 @@ describe('the pilot kitchen', () => {
     const diverted = adapted.components.filter(
       (node) => nativeAppliancesFor(node as MagicCabinetComponentNode).length > 0,
     )
-    // Only appliances get the native treatment; cabinets, countertops, trim
-    // and panels stay on the engine's own primitives.
+    // Appliances and appliance *openings* get the native treatment; cabinets,
+    // countertops, trim and panels stay on the engine's own primitives.
+    //
+    // The opening was excluded until it turned out an opening carries no
+    // geometry of its own — so excluding it did not fall back to the engine's
+    // boxes, it drew nothing, and the default kitchen shipped with no
+    // dishwasher at all. The MVP models both lists together
+    // (`applianceAssetManifest(appliances, applianceOpenings)`).
     for (const node of diverted) {
-      expect(node.componentKind, `${node.subtype} was diverted`).toBe('appliance')
+      expect(['appliance', 'appliance-opening'], `${node.subtype} was diverted`).toContain(
+        node.componentKind,
+      )
+    }
+  })
+
+  test('an appliance opening is modelled, not left empty', () => {
+    const adapted = adaptKitchenResult(generateKitchen(MAGIC_KITCHEN_DEFAULT_INPUT), {
+      parentId: 'level_test',
+      roomOrigin: [0, 0, 0],
+    })
+    const openings = adapted.components.filter((node) => node.componentKind === 'appliance-opening')
+    // Guards the premise — if the default kitchen stops reserving an opening
+    // this test would pass while proving nothing.
+    expect(openings.length).toBeGreaterThan(0)
+
+    for (const node of openings) {
+      // An opening has no primitives of its own, so the native builder is the
+      // only thing that can draw it. Empty here means an invisible appliance.
+      expect(node.geometry.length, `${node.subtype} opening has engine geometry`).toBe(0)
+      expect(
+        nativeAppliancesFor(node as MagicCabinetComponentNode).length,
+        `${node.subtype} opening draws nothing`,
+      ).toBeGreaterThan(0)
     }
   })
 })

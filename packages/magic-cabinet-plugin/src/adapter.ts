@@ -93,6 +93,7 @@ function adaptBox(
   primitive: BoxGeometry,
   component: KitchenComponent,
   invertZ: boolean,
+  panelId?: string,
 ): MagicGeometryPrimitive {
   return {
     kind: 'box',
@@ -105,6 +106,7 @@ function adaptBox(
     rotationRad: rotationRad(primitive.transform.rotationDeg, invertZ),
     materialKey: primitive.materialKey,
     ...(primitive.color ? { color: primitive.color } : {}),
+    ...(panelId ? { panelId } : {}),
   }
 }
 
@@ -162,17 +164,65 @@ function adaptPrimitive(
   primitive: GeometryPrimitive,
   component: KitchenComponent,
   invertZ: boolean,
+  panelId?: string,
 ): MagicGeometryPrimitive {
-  if (primitive.kind === 'box') return adaptBox(primitive, component, invertZ)
+  if (primitive.kind === 'box') return adaptBox(primitive, component, invertZ, panelId)
   if (primitive.kind === 'polygon-prism') return adaptPolygon(primitive, component, invertZ)
   return adaptTriangle(primitive, component, invertZ)
 }
 
+/**
+ * Panel ids, per component, read out of the engine's own scene state.
+ *
+ * `KitchenEngineState.scene` is declared `unknown` and documented "opaque,
+ * consumers must round-trip it", so this read is deliberately defensive: it
+ * only claims a mapping when the cabinet's panel list lines up one-for-one
+ * with the component's primitive list, and it hands back nothing at all if the
+ * shape is not what we expect. `geometry.ts` falls back to its geometric test
+ * for any primitive that arrives without an id.
+ *
+ * The clean fix lives upstream — `panelId` belongs on the public
+ * `BoxGeometry`, which would delete this function. See PORT.md.
+ */
+function panelIdsByComponent(result: KitchenResult): Map<string, string[]> {
+  const byComponent = new Map<string, string[]>()
+  const scene = result.engineState?.scene as { cabinets?: unknown } | undefined
+  const cabinets = scene?.cabinets
+  if (!Array.isArray(cabinets)) return byComponent
+
+  const lengthById = new Map(result.components.map((c) => [c.id, c.geometry.length]))
+  for (const cabinet of cabinets) {
+    const id = (cabinet as { id?: unknown }).id
+    const panels = (cabinet as { panels?: unknown }).panels
+    if (typeof id !== 'string' || !Array.isArray(panels)) continue
+    // Index alignment is the whole load-bearing assumption. Refuse the mapping
+    // rather than mislabel panels if the counts ever drift apart.
+    if (lengthById.get(id) !== panels.length) continue
+    const ids = panels.map((panel) => (panel as { id?: unknown }).id)
+    if (!ids.every((value): value is string => typeof value === 'string')) continue
+    byComponent.set(id, ids)
+  }
+  return byComponent
+}
+
+/**
+ * The body finish a component wears out of the box.
+ *
+ * The MVP has no per-component finish: `DesignerCanvas.tsx:292` hands
+ * `KitchenAssembly` one `cabinetColor` for the whole kitchen, and the default
+ * design picks `cabinetFinish: "white"` (`design-generation.ts:42`). So every
+ * cabinet, panel, filler and trim is the same colour, and only the surfaces
+ * the MVP excludes from `takesBodyColor` — countertops and appliances — differ.
+ *
+ * This used to split bases onto `oak` and everything else onto `sage`, which
+ * is Pascal's own showroom palette rather than the designer's default. That is
+ * the espresso-base / sage-wall kitchen in the showroom frame; Babylon's is
+ * uniformly white.
+ */
 function componentFinish(component: KitchenComponent): MagicCabinetComponentNode['finish'] {
   if (component.kind === 'countertop') return 'quartz'
   if (component.kind === 'appliance' || component.kind === 'appliance-opening') return 'black'
-  if (component.subtype.includes('base') || component.subtype.includes('sink')) return 'oak'
-  return 'sage'
+  return 'white'
 }
 
 export function adaptKitchenResult(
@@ -202,6 +252,8 @@ export function adaptKitchenResult(
         : 'valid',
   })
 
+  const panelIds = panelIdsByComponent(result)
+
   const components = result.components.map((component) =>
     MagicCabinetComponentNode.parse({
       name: component.name,
@@ -218,8 +270,8 @@ export function adaptKitchenResult(
       componentKind: component.kind,
       subtype: component.subtype,
       wall: component.wall,
-      geometry: component.geometry.map((primitive) =>
-        adaptPrimitive(primitive, component, invertZ),
+      geometry: component.geometry.map((primitive, index) =>
+        adaptPrimitive(primitive, component, invertZ, panelIds.get(component.id)?.[index]),
       ),
       planOutline: component.planOutlineIn?.map((point) => {
         const local = worldToComponentLocal(point, component)

@@ -39,6 +39,10 @@ const MIRRORED_STYLE_KEYS = [
   'cabinetTexture',
   'countertopMaterial',
   'applianceDetail',
+  // The trim switches are read by `isTrimVisible` on the *component*, so a
+  // layout-level toggle only reaches the geometry if it is mirrored down.
+  'crownMoldingEnabled',
+  'ceilingFillersEnabled',
 ] as const
 
 export type MirroredStyleKey = (typeof MIRRORED_STYLE_KEYS)[number]
@@ -81,6 +85,8 @@ export const magicCabinetLayoutParametrics: ParametricDescriptor<MagicCabinetLay
       label: 'Detail',
       fields: [
         { key: 'applianceDetail', kind: 'boolean' },
+        { key: 'crownMoldingEnabled', kind: 'boolean' },
+        { key: 'ceilingFillersEnabled', kind: 'boolean' },
         {
           key: 'backsplashHeight',
           kind: 'number',

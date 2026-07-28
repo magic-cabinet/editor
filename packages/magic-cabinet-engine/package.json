@@ -24,7 +24,7 @@
   },
   "magicCabinet": {
     "sourceRepository": "https://github.com/magic-cabinet/mvp",
-    "sourceCommit": "a28b8a0d777cbbbcf7fa1f46a3d2407bb6e5f65e",
+    "sourceCommit": "69ac3d3772e43498b66283a3c54ebd6fd5f0eade",
     "bundleSha256": "d893cc884c79f9b73e21777d79417f97a74c6db20e11024d144174ffd8675df1"
   }
 }

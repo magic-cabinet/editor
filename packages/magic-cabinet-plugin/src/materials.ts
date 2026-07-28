@@ -35,10 +35,29 @@ const MATERIAL_COLORS: Record<string, string> = {
   quartz: '#eee8dc',
   sage: '#9b9b83',
   trim: '#9b9b83',
+  // MVP `CABINET_FINISHES.white.color` (`design-options.ts:36`) — the default
+  // design's cabinet colour, and the one value with no entry here before.
+  white: '#f5f5f0',
 }
 
+/**
+ * The tint for one primitive.
+ *
+ * Order matters, and it used to be wrong. The token scan below matches on
+ * substrings of the *material key*, and the engine names cabinet parts
+ * `cabinet-panel:mdf`, `panel:mdf`, `trim:mdf` — so `cabinet` / `panel` /
+ * `trim` all hit the generic `#9b9b83` before `finish` was ever consulted.
+ * The effect was that `finish` did not tint anything a user can see: every
+ * door, panel and trim in the kitchen came out sage whatever the finish said,
+ * and only the *texture* half of the finish (wood grain vs paint) responded.
+ *
+ * A surface that takes the body finish now asks the finish first. The token
+ * scan keeps the surfaces the MVP excludes from `takesBodyColor` — glass,
+ * hardware, appliance shells — which is exactly what it is good for.
+ */
 export function materialColor(key: string, explicit: string | undefined, finish: string): string {
   if (explicit) return explicit
+  if (takesBodyFinish(key)) return MATERIAL_COLORS[finish] ?? '#9b9b83'
   const normalized = key.toLowerCase()
   for (const [token, color] of Object.entries(MATERIAL_COLORS)) {
     if (normalized.includes(token)) return color
