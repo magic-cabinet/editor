@@ -20,12 +20,40 @@ import { type MagicSlotId, slotForMaterialKey } from './slots'
  *
  *   1. `node.slots[slotId]` — what the painter wrote. `library:<id>` resolves
  *      against the static catalog, `scene:<id>` against `ctx.materials`.
- *   2. the ported MVP finish from `materials.ts`.
+ *   2. a flat `#rrggbb` in the same slot — see `HEX_COLOR` below.
+ *   3. the ported MVP finish from `materials.ts`.
  *
- * A dangling ref resolves to `null` and falls through to (2) rather than
- * throwing or rendering an untextured surface — `resolveMaterialRef` is
- * documented never to throw, and this is the behaviour that makes deleting a
- * scene material safe.
+ * A dangling ref resolves to `null` and falls through rather than throwing or
+ * rendering an untextured surface — `resolveMaterialRef` is documented never
+ * to throw, and this is the behaviour that makes deleting a scene material
+ * safe.
+ */
+
+/**
+ * Hex is not a `MaterialRef` — and handling it here is a deliberate
+ * divergence from every built-in kind.
+ *
+ * `MaterialRef` is `string` and `ParsedMaterialRef` is exactly two kinds,
+ * `library` | `scene` (`core/material-library.ts`). Hex belongs to the *slot
+ * default* vocabulary, not the *override* one: `SlotDeclaration.default` is
+ * documented as "either a `MaterialRef` (`library:<id>` / `scene:<id>`) **or**
+ * a `#rrggbb` colour" — contrasting the two, not listing three forms of one.
+ * So `resolveMaterialRef` is not narrower than its type; it matches it.
+ *
+ * The gap is one layer up. `slots` is `z.record(z.string(), z.string())` on
+ * **14** node kinds — unvalidated strings — and **10** built-in kinds resolve
+ * them through the two-form parser with this same `if (resolved) return`
+ * fall-through (`cabinet/geometry/shared.ts:82`, `slab`, `column`, `stair`,
+ * `wall`, `fence`, `shelf`, `item`, `elevator`, `duct-segment`). So a hex
+ * value written into `node.slots` by the Scene API or a hand-authored scene
+ * validates, persists, and renders as the unpainted default — silently.
+ *
+ * We render it. That is better behaviour and it is what the schema permits,
+ * but it means the same hex in the same scene paints an MC component and is
+ * ignored on a native cabinet. The divergence is intentional and pinned by
+ * `painter.test.ts`, which asserts the upstream behaviour this compensates
+ * for — so if upstream closes the gap, that test fails and this branch can be
+ * deleted rather than quietly outliving its reason.
  */
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 
@@ -49,11 +77,9 @@ export function createSlotPainter(
     if (ref) {
       const painted = resolveMaterialRef(ref, ctx?.materials, 'rendered')
       if (painted) return painted
-      // `resolveMaterialRef` only parses the two prefixed forms, but a
-      // `MaterialRef` has three — a flat `#rrggbb` is legal and is what a
-      // hand-authored scene or an MCP write is most likely to carry. Without
-      // this it would silently fall through to the unpainted finish, which
-      // reads as "paint mode is broken" rather than "that ref is unsupported".
+      // Not a `library:`/`scene:` ref. A flat colour is still legal in this
+      // record and is what a hand-authored scene or an MCP write carries, so
+      // render it rather than falling through — see `HEX_COLOR`.
       if (HEX_COLOR.test(ref)) return resolveSlotDefaultMaterial(ref, 'rendered', 0.6)
     }
     return magicMaterial(request)

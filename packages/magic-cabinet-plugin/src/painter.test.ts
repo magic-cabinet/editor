@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { GeometryContext } from '@pascal-app/core'
+import { resolveMaterialRef } from '@pascal-app/viewer'
 import type { Mesh } from 'three'
 import { buildMagicComponentGeometry } from './geometry'
 import { magicCabinetPaint } from './paint'
@@ -147,19 +148,39 @@ describe('paint override precedence', () => {
     )
   })
 
-  test('all three MaterialRef forms resolve, including bare hex', () => {
-    // `resolveMaterialRef` parses only `library:` and `scene:`, but a
-    // `MaterialRef` has three forms. A hex slot value is what a hand-authored
-    // scene or an MCP write carries, and dropping it looks like paint mode is
-    // broken rather than like an unsupported ref. Verified live: painting 14
-    // cabinet fronts `#1f6feb` through `PUT /api/scenes/:id` showed nothing
-    // until this case was handled.
+  test('a flat hex slot value paints, though it is not a MaterialRef', () => {
+    // `slots` is `z.record(z.string(), z.string())` — unvalidated — so hex
+    // reaches this code from the Scene API or a hand-authored scene. Verified
+    // live: painting 14 cabinet fronts `#1f6feb` through `PUT /api/scenes/:id`
+    // showed nothing until this case was handled.
     const node = component({ slots: { front: '#1f6feb' } })
     const material = createSlotPainter(node, undefined).material('front', {
       key: 'cabinet-panel:mdf',
       style: STYLE,
     })
     expect((material as { color: { getHexString(): string } }).color.getHexString()).toBe('1f6feb')
+  })
+
+  test('…and that is a deliberate divergence from every built-in kind', () => {
+    // The pin. Hex is NOT a `MaterialRef`: `ParsedMaterialRef` is exactly
+    // `library` | `scene`, and `SlotDeclaration.default` documents hex as the
+    // alternative *to* a ref, not a third form of one. Ten built-in kinds
+    // resolve `node.slots` through this parser and drop what it returns null
+    // for, so the same hex in the same scene paints an MC component and is
+    // ignored on a native cabinet.
+    //
+    // Asserting the upstream behaviour — rather than only our own — is what
+    // makes the workaround self-retiring: if upstream teaches the parser hex,
+    // this fails and `HEX_COLOR` in `painter.ts` can be deleted instead of
+    // quietly outliving its reason.
+    expect(resolveMaterialRef('#1f6feb', {}, 'rendered')).toBeNull()
+    expect(resolveMaterialRef('#FFF', {}, 'rendered')).toBeNull()
+    // Control: the two real forms must still parse, or the negative above
+    // would prove nothing.
+    expect(resolveMaterialRef('library:preset-softwhite', {}, 'rendered')).not.toBeNull()
+    expect(
+      resolveMaterialRef('scene:mat_1', sceneMaterial('mat_1', '#ff0000') as never, 'rendered'),
+    ).not.toBeNull()
   })
 
   test('a dangling ref falls back rather than throwing or rendering blank', () => {

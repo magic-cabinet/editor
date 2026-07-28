@@ -89,10 +89,36 @@ Three pieces make it work, and the second is the one that buys the most:
   where it sits — so `geometry.ts` decides those from `isCabinetFacade`.
 - **`painter.ts`** resolves `node.slots[slotId]` against `ctx.materials`, which
   `GeometrySystem` populates for exactly this purpose (see the field's doc comment in
-  `core/registry/types.ts`). All three `MaterialRef` forms resolve: `library:<id>`,
-  `scene:<id>`, and bare `#rrggbb` — the last needs handling of its own, because
-  `resolveMaterialRef` parses only the two prefixed forms. A dangling ref falls back to
-  the ported finish, so deleting a scene material is safe.
+  `core/registry/types.ts` — note it is `undefined` for `def.floorplan`, so a future
+  slot-aware 2D view cannot reuse this path as-is). Both `MaterialRef` forms resolve,
+  `library:<id>` and `scene:<id>`, plus a flat `#rrggbb` — see the divergence below. A
+  dangling ref falls back to the ported finish, so deleting a scene material is safe.
+
+### One deliberate divergence: flat hex in a slot
+
+Hex is **not** a `MaterialRef`. `ParsedMaterialRef` is exactly `library | scene`, and
+`SlotDeclaration.default` documents hex as the alternative *to* a ref — "either a
+`MaterialRef` (`library:<id>` / `scene:<id>`) **or** a `#rrggbb` colour". So
+`resolveMaterialRef` matches its own type; it is not narrower than it.
+
+The gap is one layer up. `slots` is `z.record(z.string(), z.string())` on **14** node
+kinds — unvalidated — and **10** built-in kinds resolve it through the two-form parser
+with an `if (resolved) return` fall-through (`cabinet/geometry/shared.ts:82`, `slab`,
+`column`, `stair`, `wall`, `fence`, `shelf`, `item`, `elevator`, `duct-segment`). A hex
+value written by the Scene API or a hand-authored scene therefore validates, persists,
+and renders as the unpainted default — silently, on every built-in kind.
+
+This plugin renders it instead. That is better behaviour and it is what the schema
+permits, but the cost is real and worth naming: **the same hex in the same scene paints
+an MC component and is ignored on a native cabinet.** `painter.test.ts` pins the upstream
+half of that — it asserts `resolveMaterialRef` returns `null` for hex, with the two real
+forms as controls — so if upstream closes the gap the test fails and `HEX_COLOR` can be
+deleted rather than quietly outliving its reason.
+
+Found by Bumble, who also spotted that this and the inert `glb` / `instanced-glb`
+`RendererSource` kinds are the same shape: a declared surface wider than the
+implementation consuming it, failing by returning `null` instead of loudly. Upstream
+issue draft: `OUTBOX/PASCAL_UPSTREAM_ISSUE_SILENT_NULLS.md`.
 
 Verified live: `PUT /api/scenes/:id` writing `slots: {front: '#1f6feb'}` onto the pilot's
 14 cabinets turned every door blue and left carcass, countertop, backsplash, cooktop
@@ -136,8 +162,10 @@ well-typed, validator-green, and wrong.
   fields and does **not** fire for layout-only ones.
 - `painter.test.ts` — asserts every emitted mesh carries a slot id (an unstamped mesh is
   invisible to paint mode, with no error), that a door face and its carcass side land on
-  different slots, and that all three `MaterialRef` forms resolve. Verified against two
-  negative controls: removing the stamp fails three tests, ignoring the override fails one.
+  different slots, and that both `MaterialRef` forms plus a flat hex resolve. Verified
+  against two negative controls: removing the stamp fails three tests, ignoring the
+  override fails one. It also pins the hex divergence against upstream's own behaviour,
+  so the workaround is self-retiring.
 
 ## Still not ported
 
