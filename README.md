@@ -10,6 +10,75 @@ A 3D building editor built with React Three Fiber and WebGPU.
 
 https://github.com/user-attachments/assets/8b50e7cf-cebe-4579-9cf3-8786b35f7b6b
 
+## Magic Cabinet dev: editor + MCP in Docker
+
+The development stack runs the Magic Cabinet editor and its Streamable HTTP MCP
+server in one container. Both processes share the same persistent scene database,
+so an MCP edit appears live in the open 3D editor.
+
+### 1. Start the stack
+
+Docker Desktop is the only prerequisite.
+
+```bash
+git clone https://github.com/magic-cabinet/editor.git
+cd editor
+git switch --track origin/magic/pilot-editor-20260727
+docker compose up --build -d
+```
+
+Open the live editor at [http://127.0.0.1:8080/live](http://127.0.0.1:8080/live).
+The MCP endpoint is `http://127.0.0.1:8080/mcp`.
+
+The pilot's local-only development token is `magic-cabinet-dev`. To use a
+different token or port, create a `.env` file before starting:
+
+```dotenv
+PASCAL_MCP_HTTP_TOKEN=replace-with-a-long-random-value
+MAGIC_CABINET_PORT=8080
+```
+
+Never reuse the development token for a hosted environment.
+
+### 2. Connect Codex
+
+Add this to `~/.codex/config.toml`, then restart Codex:
+
+```toml
+[mcp_servers.magic-cabinet]
+url = "http://127.0.0.1:8080/mcp"
+http_headers = { Authorization = "Bearer magic-cabinet-dev" }
+```
+
+If `.env` contains a custom token, use that same value in the Authorization
+header. Other MCP clients can connect to the same URL with the same Bearer
+header.
+
+### 3. Verify and use it
+
+```bash
+docker compose ps
+curl --fail http://127.0.0.1:8080/api/health
+docker compose logs -f showroom
+```
+
+The server exposes seven Magic Cabinet tools:
+
+- `start_magic_kitchen_session`
+- `update_magic_kitchen`
+- `set_kitchen_palette`
+- `set_kitchen_handles`
+- `set_kitchen_camera`
+- `get_kitchen_bom`
+- `validate_magic_kitchen_session`
+
+Try: “Use the Magic Cabinet MCP to start a sage-and-oak kitchen session, open
+its editor URL, switch to the workwall camera, and validate the scene.”
+
+Scenes persist in the Docker volume across restarts. Stop the stack with
+`docker compose down`. Running `docker compose down -v` also deletes the saved
+local scenes.
+
 ## Using Published Packages
 
 The viewer runtime and built-in node definitions are separate packages. Install the full built-in
