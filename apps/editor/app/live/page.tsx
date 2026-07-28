@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { getSceneOperations } from '@/lib/scene-store-server'
+import Home from '../page'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,5 +14,5 @@ export default async function LivePage() {
     }
   }
 
-  redirect('/scenes')
+  return <Home />
 }
