@@ -64,7 +64,7 @@ function validateOrigin(request: Request): NextResponse | null {
 
 function validateAuth(request: Request): NextResponse | null {
   const origin = request.headers.get('origin')
-  if (origin && isSameOrigin(request, origin)) return null
+  if (origin && isTrustedBrowserOrigin(request, origin)) return null
 
   const token = process.env.PASCAL_SCENE_API_TOKEN
   if (!token) {
@@ -126,7 +126,7 @@ function clientIp(request: Request): string {
 }
 
 function isOriginAllowed(request: Request, origin: string): boolean {
-  if (isSameOrigin(request, origin)) return true
+  if (isTrustedBrowserOrigin(request, origin)) return true
   const parsed = parseUrl(origin)
   if (!parsed) return false
   if (isLoopbackHostname(parsed.hostname)) return true
@@ -149,6 +149,19 @@ function isSameOrigin(request: Request, origin: string): boolean {
   const parsedOrigin = parseUrl(origin)
   if (!parsedOrigin) return false
   return normalizeOrigin(parsedOrigin) === publicRequestOrigin(request)
+}
+
+/**
+ * Sandboxed embedded browsers use the opaque `Origin: null` value even for
+ * JavaScript loaded from the scene itself. Accept that case only when the
+ * browser-controlled Referer still resolves to this app's public origin.
+ */
+function isTrustedBrowserOrigin(request: Request, origin: string): boolean {
+  if (origin !== 'null') return isSameOrigin(request, origin)
+
+  const referer = request.headers.get('referer')
+  const parsedReferer = referer ? parseUrl(referer) : null
+  return parsedReferer !== null && normalizeOrigin(parsedReferer) === publicRequestOrigin(request)
 }
 
 function publicRequestOrigin(request: Request): string {

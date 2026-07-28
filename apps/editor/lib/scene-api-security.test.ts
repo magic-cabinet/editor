@@ -50,6 +50,40 @@ test('allows same-origin browser requests without exposing the API cross-origin'
   expect(guardSceneApiRequest(request)).toBeNull()
 })
 
+test('allows an opaque embedded-browser origin only with a same-origin referrer', () => {
+  delete process.env.PASCAL_SCENE_API_TOKEN
+  const request = new Request('http://127.0.0.1:3002/api/scenes', {
+    method: 'PUT',
+    headers: {
+      host: 'editor.example',
+      origin: 'null',
+      referer: 'https://editor.example/scene/test',
+      'x-forwarded-host': 'editor.example',
+      'x-forwarded-proto': 'https',
+    },
+  })
+
+  expect(guardSceneApiRequest(request)).toBeNull()
+})
+
+test('rejects an opaque embedded-browser origin with a foreign referrer', async () => {
+  delete process.env.PASCAL_SCENE_API_TOKEN
+  const request = new Request('http://127.0.0.1:3002/api/scenes', {
+    method: 'PUT',
+    headers: {
+      host: 'editor.example',
+      origin: 'null',
+      referer: 'https://attacker.example/',
+      'x-forwarded-host': 'editor.example',
+      'x-forwarded-proto': 'https',
+    },
+  })
+
+  const response = guardSceneApiRequest(request)
+  expect(response?.status).toBe(403)
+  expect(await response?.json()).toEqual({ error: 'origin_not_allowed' })
+})
+
 test('accepts bearer token auth when configured', () => {
   process.env.PASCAL_SCENE_API_TOKEN = 'secret'
   const request = new Request('https://editor.example/api/scenes', {
