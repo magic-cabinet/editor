@@ -37,6 +37,20 @@ function nodeFor(adapted: AdaptedMagicKitchen, engineComponentId: string) {
   return node
 }
 
+/**
+ * Where a node-local plan point actually lands, once the floor plan applies
+ * the node's own yaw (`rotate(-yaw)` in `buildMagicComponentFloorplan`, which
+ * matches `<group rotation>` in 3D).
+ */
+function planWorldZ(
+  node: AdaptedMagicKitchen['components'][number],
+  point: readonly [number, number] | undefined,
+): number {
+  const [x, z] = point ?? [0, 0]
+  const yaw = node.rotation[1]
+  return node.position[2] - x * Math.sin(yaw) + z * Math.cos(yaw)
+}
+
 describe('invertZ — left-handed engine to right-handed Pascal', () => {
   const result = generateKitchen(PILOT_KITCHEN_INPUT)
 
@@ -83,7 +97,11 @@ describe('invertZ — left-handed engine to right-handed Pascal', () => {
     expect(control.rotation[1]).toBeCloseTo(Math.PI / 2, 6)
   })
 
-  test('countertop plan outlines are mirrored in Z, not copied', () => {
+  test('plan outlines are mirrored in Z, not copied', () => {
+    // `planOutlineIn` is room-world inches with the component yaw already
+    // baked in (`rotatedFootprintPolygon`), so the flip has to be read
+    // through the node transform the renderers apply — reading the stored
+    // pair directly conflates the handedness leg with the yaw leg.
     const source = result.components.find(
       (component) =>
         component.planOutlineIn?.some(
@@ -91,14 +109,21 @@ describe('invertZ — left-handed engine to right-handed Pascal', () => {
         ) ?? false,
     ) as KitchenComponent
     const outline = source.planOutlineIn ?? []
-    const flipped = nodeFor(adapt(result), source.id).planOutline ?? []
-    const control = nodeFor(adapt(result, false), source.id).planOutline ?? []
+    const flippedNode = nodeFor(adapt(result), source.id)
+    const controlNode = nodeFor(adapt(result, false), source.id)
+    const flipped = flippedNode.planOutline ?? []
+    const control = controlNode.planOutline ?? []
 
     expect(flipped).toHaveLength(outline.length)
     for (const [index, point] of outline.entries()) {
-      const localZ = (point.z - source.transform.positionIn.z) * INCH_TO_METER
-      expect(flipped[index]?.[1]).toBeCloseTo(-localZ, 6)
-      expect(control[index]?.[1]).toBeCloseTo(localZ, 6)
+      expect(planWorldZ(flippedNode, flipped[index])).toBeCloseTo(
+        ROOM_ORIGIN[2] - point.z * INCH_TO_METER,
+        6,
+      )
+      expect(planWorldZ(controlNode, control[index])).toBeCloseTo(
+        ROOM_ORIGIN[2] + point.z * INCH_TO_METER,
+        6,
+      )
     }
     expect(flipped).not.toEqual(control)
   })

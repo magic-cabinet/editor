@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { generateKitchen, PILOT_KITCHEN_INPUT, validateKitchen } from '@magic-cabinet/engine'
+import {
+  type GenerateKitchenInput,
+  generateKitchen,
+  type KitchenComponent,
+  PILOT_KITCHEN_INPUT,
+  validateKitchen,
+} from '@magic-cabinet/engine'
 import { adaptKitchenResult } from './adapter'
+import type { MagicCabinetComponentNode } from './schema'
 import { createMagicKitchenPilotScene } from './house'
 import { createMagicKitchenHouseShell } from './house-shell'
 import { magicCabinetPlugin } from './index'
@@ -36,6 +43,100 @@ describe('Magic Cabinet Pascal adapter', () => {
         }),
     ).toBe(true)
   })
+
+  /**
+   * Both renderers place a component's children by rotating node-local points
+   * with the node yaw: `<group rotation={node.rotation}>` in 3D and
+   * `rotate(-yaw)` in `buildMagicComponentFloorplan`. So for any engine point
+   * that arrives in room-world inches, this has to hold:
+   *
+   *   nodePosition + R(yaw) * nodeLocalPoint === roomOrigin + convert(worldPoint)
+   *
+   * It fails if the yaw is applied twice, if the handedness flip is missing or
+   * doubled, or if the inch conversion is wrong — the three ways this adapter
+   * can silently produce plausible geometry.
+   */
+  const worldAnchoredPoints = (component: KitchenComponent) => [
+    ...(component.planOutlineIn ?? []).map((point, index) => ({
+      label: `planOutline[${index}]`,
+      point,
+    })),
+    ...component.geometry.flatMap((primitive, primitiveIndex) =>
+      primitive.kind === 'polygon-prism'
+        ? [
+            ...primitive.outlineIn.map((point, index) => ({
+              label: `geometry[${primitiveIndex}].outlineM[${index}]`,
+              point,
+            })),
+            ...(primitive.holesIn ?? []).flatMap((hole, holeIndex) =>
+              hole.outlineIn.map((point, index) => ({
+                label: `geometry[${primitiveIndex}].holesM[${holeIndex}][${index}]`,
+                point,
+              })),
+            ),
+          ]
+        : [],
+    ),
+  ]
+
+  const nodeLocalPoints = (node: MagicCabinetComponentNode) => [
+    ...(node.planOutline ?? []),
+    ...node.geometry.flatMap((primitive) =>
+      primitive.kind === 'polygon-prism'
+        ? [...primitive.outlineM, ...primitive.holesM.flat()]
+        : [],
+    ),
+  ]
+
+  const roomOrigin: [number, number, number] = [-5.45, 0.05, -0.7]
+
+  for (const layout of ['galley', 'l-shape', 'u-shape', 'one-wall'] as const) {
+    test(`places world-anchored outlines at their engine coordinates (${layout})`, () => {
+      const input: GenerateKitchenInput = {
+        ...PILOT_KITCHEN_INPUT,
+        room: { ...PILOT_KITCHEN_INPUT.room, layout },
+      }
+      const result = generateKitchen(input)
+      const adapted = adaptKitchenResult(result, { parentId: 'level_test', roomOrigin })
+      const nodesByEngineId = new Map(
+        adapted.components.map((component) => [component.engineComponentId, component]),
+      )
+
+      let checked = 0
+      const yaws = new Set<number>()
+      for (const component of result.components) {
+        const node = nodesByEngineId.get(component.id)
+        expect(node).toBeDefined()
+        if (!node) continue
+
+        const expected = worldAnchoredPoints(component)
+        const actual = nodeLocalPoints(node)
+        expect(actual).toHaveLength(expected.length)
+        if (expected.length === 0) continue
+        yaws.add(component.transform.rotationDeg.y)
+
+        const yaw = node.rotation[1]
+        for (const [index, { label, point }] of expected.entries()) {
+          const [localX, localZ] = actual[index] as [number, number]
+          const worldX = node.position[0] + localX * Math.cos(yaw) + localZ * Math.sin(yaw)
+          const worldZ = node.position[2] - localX * Math.sin(yaw) + localZ * Math.cos(yaw)
+
+          expect(`${component.id}.${label}.x=${worldX.toFixed(6)}`).toBe(
+            `${component.id}.${label}.x=${(roomOrigin[0] + point.x * 0.0254).toFixed(6)}`,
+          )
+          expect(`${component.id}.${label}.z=${worldZ.toFixed(6)}`).toBe(
+            `${component.id}.${label}.z=${(roomOrigin[2] - point.z * 0.0254).toFixed(6)}`,
+          )
+          checked += 1
+        }
+      }
+
+      // Guards the guard: a fixture with no world-anchored points, or only
+      // unrotated ones, cannot tell a correct adapter from a broken one.
+      expect(checked).toBeGreaterThan(0)
+      expect([...yaws].some((value) => value % 360 !== 0)).toBe(true)
+    })
+  }
 
   test('publishes an API v1 plugin with only Magic Cabinet node kinds', () => {
     expect(magicCabinetPlugin.apiVersion).toBe(1)

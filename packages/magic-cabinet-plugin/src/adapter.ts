@@ -42,6 +42,28 @@ function rotationRad(
   return [value.x * d, (invertZ ? -value.y : value.y) * d, value.z * d]
 }
 
+/**
+ * Engine points that are already in room-world inches — `space: 'world'`
+ * primitives and `planOutlineIn` — carry the component yaw baked in. The
+ * Pascal node re-applies that yaw to its children (`<group rotation>` in 3D,
+ * `rotate(-yaw)` in the floor plan), so a world point has to be un-rotated
+ * back into the component frame first or the rotation lands twice. Only
+ * asymmetric shapes show the difference: a centred box maps onto itself.
+ */
+function worldToComponentLocal(
+  point: { x: number; z: number },
+  component: KitchenComponent,
+): { x: number; z: number } {
+  const c = component.transform.positionIn
+  const theta = (component.transform.rotationDeg.y * Math.PI) / 180
+  const dx = point.x - c.x
+  const dz = point.z - c.z
+  return {
+    x: dx * Math.cos(theta) - dz * Math.sin(theta),
+    z: dx * Math.sin(theta) + dz * Math.cos(theta),
+  }
+}
+
 function componentPosition(
   component: KitchenComponent,
   roomOrigin: [number, number, number],
@@ -62,10 +84,9 @@ function primitiveLocalPosition(
 ): [number, number, number] {
   const p = primitive.transform.positionIn
   const c = component.transform.positionIn
-  const x = primitive.space === 'world' ? p.x - c.x : p.x
+  const local = primitive.space === 'world' ? worldToComponentLocal(p, component) : p
   const y = primitive.space === 'world' ? p.y - c.y : p.y
-  const z = primitive.space === 'world' ? p.z - c.z : p.z
-  return [meters(x), meters(y), meters(invertZ ? -z : z)]
+  return [meters(local.x), meters(y), meters(invertZ ? -local.z : local.z)]
 }
 
 function adaptBox(
@@ -93,10 +114,10 @@ function adaptPolygon(
   invertZ: boolean,
 ): MagicGeometryPrimitive {
   const c = component.transform.positionIn
-  const localPoint = (point: { x: number; z: number }): [number, number] => [
-    meters(point.x - c.x),
-    meters(invertZ ? -(point.z - c.z) : point.z - c.z),
-  ]
+  const localPoint = (point: { x: number; z: number }): [number, number] => {
+    const local = worldToComponentLocal(point, component)
+    return [meters(local.x), meters(invertZ ? -local.z : local.z)]
+  }
   return {
     kind: 'polygon-prism',
     outlineM: primitive.outlineIn.map(localPoint),
@@ -200,14 +221,10 @@ export function adaptKitchenResult(
       geometry: component.geometry.map((primitive) =>
         adaptPrimitive(primitive, component, invertZ),
       ),
-      planOutline: component.planOutlineIn?.map((point) => [
-        meters(point.x - component.transform.positionIn.x),
-        meters(
-          invertZ
-            ? -(point.z - component.transform.positionIn.z)
-            : point.z - component.transform.positionIn.z,
-        ),
-      ]),
+      planOutline: component.planOutlineIn?.map((point) => {
+        const local = worldToComponentLocal(point, component)
+        return [meters(local.x), meters(invertZ ? -local.z : local.z)]
+      }),
       catalog: component.catalog,
       catalogState: component.catalogState,
       manuallyPinned: result.pinnedComponentIds.includes(component.id),
