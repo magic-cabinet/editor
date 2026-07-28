@@ -1,6 +1,7 @@
 import type { AnyNodeDefinition, HandleDescriptor, NodeDefinition } from '@pascal-app/core'
 import { buildMagicComponentFloorplan, buildMagicLayoutFloorplan } from './floorplan'
 import { buildMagicComponentGeometry, buildMagicLayoutGeometry } from './geometry'
+import { magicCabinetComponentParametrics, magicCabinetLayoutParametrics } from './parametrics'
 import {
   MagicCabinetComponentNode,
   type MagicCabinetComponentNode as MagicCabinetComponentNodeType,
@@ -71,6 +72,12 @@ export const magicCabinetLayoutDefinition: NodeDefinition<typeof MagicCabinetLay
     validationState: 'valid',
     activePresentation: 'hero',
     palette: 'sage-oak',
+    doorStyle: 'slab',
+    cabinetTexture: 'none',
+    countertopMaterial: 'quartz',
+    applianceDetail: true,
+    floorType: 'hardwood',
+    backsplashMaterial: 'white-metro-tile',
   }),
   capabilities: {
     selectable: { hitVolume: 'bbox' },
@@ -80,6 +87,7 @@ export const magicCabinetLayoutDefinition: NodeDefinition<typeof MagicCabinetLay
   },
   geometry: buildMagicLayoutGeometry,
   floorplan: buildMagicLayoutFloorplan,
+  parametrics: magicCabinetLayoutParametrics,
   presentation: {
     label: 'Magic Kitchen',
     description: 'Deterministic Magic Cabinet kitchen layout and presentation state.',
@@ -120,6 +128,10 @@ export const magicCabinetComponentDefinition: NodeDefinition<typeof MagicCabinet
     manuallyPinned: true,
     finish: 'sage',
     handleStyle: 'bar',
+    doorStyle: 'slab',
+    cabinetTexture: 'none',
+    countertopMaterial: 'quartz',
+    applianceDetail: true,
   }),
   capabilities: {
     movable: { axes: ['x', 'z'], gridSnap: true },
@@ -143,6 +155,7 @@ export const magicCabinetComponentDefinition: NodeDefinition<typeof MagicCabinet
   handles: [componentMoveHandle, componentRotateHandle],
   geometry: buildMagicComponentGeometry,
   floorplan: buildMagicComponentFloorplan,
+  parametrics: magicCabinetComponentParametrics,
   presentation: {
     label: 'Magic Cabinet',
     description: 'Cabinet, worktop, appliance, panel, or trim from the Magic engine.',

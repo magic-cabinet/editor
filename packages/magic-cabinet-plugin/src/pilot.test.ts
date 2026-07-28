@@ -7,11 +7,11 @@ import {
   validateKitchen,
 } from '@magic-cabinet/engine'
 import { adaptKitchenResult } from './adapter'
-import type { MagicCabinetComponentNode } from './schema'
 import { createMagicKitchenPilotScene } from './house'
 import { createMagicKitchenHouseShell } from './house-shell'
 import { magicCabinetPlugin } from './index'
 import { getMagicPilotPresentation, MAGIC_PILOT_PRESENTATIONS } from './presentation'
+import type { MagicCabinetComponentNode } from './schema'
 
 describe('Magic Cabinet Pascal adapter', () => {
   test('preserves the exact deterministic result and converts geometry to metres', () => {
@@ -82,9 +82,7 @@ describe('Magic Cabinet Pascal adapter', () => {
   const nodeLocalPoints = (node: MagicCabinetComponentNode) => [
     ...(node.planOutline ?? []),
     ...node.geometry.flatMap((primitive) =>
-      primitive.kind === 'polygon-prism'
-        ? [...primitive.outlineM, ...primitive.holesM.flat()]
-        : [],
+      primitive.kind === 'polygon-prism' ? [...primitive.outlineM, ...primitive.holesM.flat()] : [],
     ),
   ]
 

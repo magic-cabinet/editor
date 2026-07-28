@@ -1,11 +1,12 @@
-import { magicCabinetDefinitions } from '@magic-cabinet/pascal-plugin'
+// Schemas only — the barrel would pull the plugin's geometry (three.js, and
+// through the cabinet appliance builders the editor's client-only React) into
+// a server route that just needs to `safeParse`.
+import { magicCabinetSchemas } from '@magic-cabinet/pascal-plugin/schemas'
 import { nodeRegistry } from '@pascal-app/core/registry'
 import { AnyNode } from '@pascal-app/core/schema'
 import { z } from 'zod'
 
-const bundledPluginSchemas = new Map(
-  magicCabinetDefinitions.map((definition) => [definition.kind, definition.schema]),
-)
+const bundledPluginSchemas = new Map(magicCabinetSchemas.map((entry) => [entry.kind, entry.schema]))
 
 function schemaForNode(node: unknown) {
   if (typeof node !== 'object' || node === null || !('type' in node)) return AnyNode

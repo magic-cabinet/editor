@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./cabinet-geometry": {
+      "types": "./dist/cabinet/geometry-kit.d.ts",
+      "import": "./dist/cabinet/geometry-kit.js",
+      "default": "./dist/cabinet/geometry-kit.js"
     }
   },
   "files": [

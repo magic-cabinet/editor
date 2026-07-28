@@ -1,62 +1,144 @@
 import {
   BoxGeometry,
   BufferGeometry,
-  Color,
   ExtrudeGeometry,
   Float32BufferAttribute,
   Group,
   Mesh,
-  MeshStandardMaterial,
   Path,
   Shape,
   SphereGeometry,
 } from 'three'
+import { addNativeAppliances } from './appliances'
+import {
+  backsplashMaterialPlan,
+  floorMaterialPlan,
+  type MagicStyleContext,
+  magicMaterial,
+} from './materials'
 import type { MagicCabinetComponentNode, MagicCabinetLayoutNode } from './schema'
+import { FLOOR_TEXTURES, SHAKER_FRAME } from './style'
 
-const MATERIAL_COLORS: Record<string, string> = {
-  appliance: '#18191b',
-  black: '#18191b',
-  cabinet: '#9b9b83',
-  countertop: '#eee8dc',
-  filler: '#9b9b83',
-  glass: '#b9d6df',
-  hardware: '#17181a',
-  oak: '#bc8751',
-  panel: '#9b9b83',
-  quartz: '#eee8dc',
-  sage: '#9b9b83',
-  trim: '#9b9b83',
+const INCH_TO_METER = 0.0254
+
+/**
+ * Engine component-local geometry is CORNER-anchored: primitives run
+ * `0 → +width`, `0 → +height`, `0 → +depth`, and the adapter's handedness flip
+ * negates z. So a component node's own frame spans x ∈ [0, W], y ∈ [0, H],
+ * z ∈ [-D, 0] — the cabinet front is at `-D`, not at `+D/2`. Anything the
+ * plugin adds on top of the engine primitives (handles, LEDs, shaker frames)
+ * has to be placed in that frame.
+ */
+type ComponentFrame = { width: number; height: number; depth: number }
+
+function frameOf(node: MagicCabinetComponentNode): ComponentFrame {
+  return { width: node.dimensions[0], height: node.dimensions[1], depth: node.dimensions[2] }
 }
 
-function materialColor(key: string, explicit: string | undefined, finish: string): string {
-  if (explicit) return explicit
-  const normalized = key.toLowerCase()
-  for (const [token, color] of Object.entries(MATERIAL_COLORS)) {
-    if (normalized.includes(token)) return color
+function styleOf(node: MagicCabinetComponentNode): MagicStyleContext {
+  return {
+    finish: node.finish,
+    cabinetTexture: node.cabinetTexture,
+    countertopMaterial: node.countertopMaterial,
   }
-  return MATERIAL_COLORS[finish] ?? '#9b9b83'
 }
 
-function material(
-  key: string,
-  explicit: string | undefined,
-  finish: string,
-  emissive = false,
-): MeshStandardMaterial {
-  const color = materialColor(key, explicit, finish)
-  return new MeshStandardMaterial({
-    color,
-    emissive: emissive ? new Color('#ffcc78') : new Color('#000000'),
-    emissiveIntensity: emissive ? 2.4 : 0,
-    metalness: key.toLowerCase().includes('hardware') ? 0.72 : 0.05,
-    roughness: key.toLowerCase().includes('quartz') ? 0.32 : 0.68,
-  })
+type BoxPrimitive = Extract<MagicCabinetComponentNode['geometry'][number], { kind: 'box' }>
+
+const FACADE_THICKNESS_M = 0.75 * INCH_TO_METER
+const THICKNESS_TOLERANCE_M = 0.01 * INCH_TO_METER
+// A panel counts as "at the front" when it reaches the carcass front plane.
+// Sub-millimetre slack absorbs the inch→metre conversion.
+const FRONT_PLANE_TOLERANCE_M = 0.0005
+
+/** How far a box reaches toward the room, in the node's own frame. */
+function frontReach(primitive: BoxPrimitive): number {
+  return -(primitive.positionM[2] - primitive.dimensionsM[2] / 2)
+}
+
+function isFrontOfCarcass(primitive: BoxPrimitive, frame: ComponentFrame): boolean {
+  return frontReach(primitive) >= frame.depth - FRONT_PLANE_TOLERANCE_M
+}
+
+/**
+ * Door and drawer fronts. The engine names them `cabinet-panel:mdf` (carcass
+ * panels are `plywood`, backs are `back_panel`) and builds them 3/4" thick at
+ * the front plane — the same distinction the MVP draws by panel id in
+ * `isShakerFacadePanel`, which Pascal does not receive.
+ */
+export function isCabinetFacade(
+  primitive: MagicCabinetComponentNode['geometry'][number],
+  frame: ComponentFrame,
+): primitive is BoxPrimitive {
+  if (primitive.kind !== 'box') return false
+  if (!primitive.materialKey.toLowerCase().includes('mdf')) return false
+  if (Math.abs(primitive.dimensionsM[2] - FACADE_THICKNESS_M) > THICKNESS_TOLERANCE_M) return false
+  return isFrontOfCarcass(primitive, frame)
+}
+
+/**
+ * The slim dark bar the engine models in front of a drawer face — its built-in
+ * pull. It shares the facade's `mdf` key but is much thinner and sits proud of
+ * the door, so it is the one primitive `handleStyle` has to be able to remove.
+ */
+export function isEnginePull(
+  primitive: MagicCabinetComponentNode['geometry'][number],
+  frame: ComponentFrame,
+): primitive is BoxPrimitive {
+  if (primitive.kind !== 'box') return false
+  if (!primitive.materialKey.toLowerCase().includes('mdf')) return false
+  if (primitive.dimensionsM[2] >= FACADE_THICKNESS_M - THICKNESS_TOLERANCE_M) return false
+  return frontReach(primitive) > frame.depth + FRONT_PLANE_TOLERANCE_M
+}
+
+/**
+ * MVP `addShakerFrame` — four rails and stiles 3" wide standing 0.4" proud of
+ * the door, with the centre panel recessed 0.25" behind them. Emitted as
+ * children of the door face's own position so the frame follows any facade the
+ * engine places, on any wall.
+ */
+function addShakerFrame(group: Group, facade: BoxPrimitive, node: MagicCabinetComponentNode): void {
+  const frameWidth = SHAKER_FRAME.frameWidthIn * INCH_TO_METER
+  const frameDepth = SHAKER_FRAME.frameDepthIn * INCH_TO_METER
+  const [width, height, thickness] = facade.dimensionsM
+  // A door narrower or shorter than two frame members has no centre panel to
+  // recess — the MVP would emit degenerate stiles, so leave it a slab.
+  if (width <= frameWidth * 2 || height <= frameWidth * 2) return
+
+  const parts: Array<[string, number, number, number, number]> = [
+    ['top-rail', width, frameWidth, 0, height / 2 - frameWidth / 2],
+    ['bottom-rail', width, frameWidth, 0, -height / 2 + frameWidth / 2],
+    ['left-stile', frameWidth, height - frameWidth * 2, -width / 2 + frameWidth / 2, 0],
+    ['right-stile', frameWidth, height - frameWidth * 2, width / 2 - frameWidth / 2, 0],
+  ]
+
+  for (const [partId, partWidth, partHeight, x, y] of parts) {
+    const part = new Mesh(
+      new BoxGeometry(partWidth, partHeight, thickness + frameDepth),
+      magicMaterial({
+        key: facade.materialKey,
+        explicit: facade.color,
+        style: styleOf(node),
+        size: [partWidth, partHeight],
+      }),
+    )
+    part.name = `magic-shaker-${partId}`
+    // The frame stands proud of the door, which is toward the room — the
+    // negative-z side of the component frame.
+    part.position.set(
+      facade.positionM[0] + x,
+      facade.positionM[1] + y,
+      facade.positionM[2] - frameDepth / 2,
+    )
+    part.rotation.set(...facade.rotationRad)
+    group.add(part)
+  }
 }
 
 function addPolygonPrimitive(
   group: Group,
   primitive: Extract<MagicCabinetComponentNode['geometry'][number], { kind: 'polygon-prism' }>,
-  finish: string,
+  node: MagicCabinetComponentNode,
 ): void {
   if (primitive.outlineM.length < 3) return
   const [first, ...rest] = primitive.outlineM
@@ -80,7 +162,12 @@ function addPolygonPrimitive(
       depth: primitive.heightM,
       steps: 1,
     }),
-    material(primitive.materialKey, primitive.color, finish),
+    magicMaterial({
+      key: primitive.materialKey,
+      explicit: primitive.color,
+      style: styleOf(node),
+      size: outlineSize(primitive.outlineM),
+    }),
   )
   mesh.name = 'magic-polygon-prism'
   mesh.rotation.x = Math.PI / 2
@@ -88,33 +175,75 @@ function addPolygonPrimitive(
   group.add(mesh)
 }
 
+/** Bounding size of a plan outline, for the size-driven UV scale. */
+function outlineSize(outline: readonly (readonly [number, number])[]): [number, number] {
+  const xs = outline.map((point) => point[0])
+  const ys = outline.map((point) => point[1])
+  return [
+    Math.max(1e-3, Math.max(...xs) - Math.min(...xs)),
+    Math.max(1e-3, Math.max(...ys) - Math.min(...ys)),
+  ]
+}
+
 export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Group {
   const group = new Group()
   group.name = `magic-component:${node.engineComponentId}`
+  const frame = frameOf(node)
+  const style = styleOf(node)
+  const shaker = node.componentKind === 'cabinet' && node.doorStyle === 'shaker'
+
+  // A detailed appliance replaces the engine's box rather than covering it —
+  // two coincident faces would z-fight, and the engine's dimensions survive
+  // regardless: they are the node's `dimensions`, which is what sizes both the
+  // footprint used for collision and the appliance drawn here.
+  if (node.applianceDetail && addNativeAppliances(group, node, style)) return group
 
   for (const primitive of node.geometry) {
     const isHardware = primitive.materialKey.toLowerCase().includes('hardware')
     if (isHardware && node.handleStyle !== 'bar') continue
     if (primitive.kind === 'box') {
+      // The engine's own drawer pull is a `mdf` bar, not a `hardware` key, so
+      // it survived the filter above and `handleStyle: 'none'` still showed a
+      // pull. Treat it as the bar handle it is.
+      if (node.handleStyle !== 'bar' && isEnginePull(primitive, frame)) continue
+
+      const facade = shaker && isCabinetFacade(primitive, frame)
+      // MVP `constructPanel` thins the door by `recessDepth` and sets the
+      // centre panel back by half of it, so the frame reads as proud.
+      const recess = facade ? SHAKER_FRAME.recessDepthIn * INCH_TO_METER : 0
+      const depth = primitive.dimensionsM[2] - recess
       const mesh = new Mesh(
-        new BoxGeometry(...primitive.dimensionsM),
-        material(primitive.materialKey, primitive.color, node.finish),
+        new BoxGeometry(primitive.dimensionsM[0], primitive.dimensionsM[1], depth),
+        magicMaterial({
+          key: primitive.materialKey,
+          explicit: primitive.color,
+          style,
+          size: [primitive.dimensionsM[0], primitive.dimensionsM[1]],
+        }),
       )
       mesh.name = `magic-box:${primitive.materialKey}`
-      mesh.position.set(...primitive.positionM)
+      mesh.position.set(
+        primitive.positionM[0],
+        primitive.positionM[1],
+        primitive.positionM[2] + recess / 2,
+      )
       mesh.rotation.set(...primitive.rotationRad)
       group.add(mesh)
+      if (facade) addShakerFrame(group, primitive, node)
       continue
     }
     if (primitive.kind === 'polygon-prism') {
-      addPolygonPrimitive(group, primitive, node.finish)
+      addPolygonPrimitive(group, primitive, node)
       continue
     }
     const geometry = new BufferGeometry()
     geometry.setAttribute('position', new Float32BufferAttribute(primitive.positionsM, 3))
     geometry.setIndex(primitive.indices)
     geometry.computeVertexNormals()
-    const mesh = new Mesh(geometry, material(primitive.materialKey, primitive.color, node.finish))
+    const mesh = new Mesh(
+      geometry,
+      magicMaterial({ key: primitive.materialKey, explicit: primitive.color, style }),
+    )
     mesh.name = `magic-triangle-mesh:${primitive.materialKey}`
     mesh.position.set(...primitive.positionM)
     mesh.rotation.set(...primitive.rotationRad)
@@ -127,27 +256,34 @@ export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Gr
   ) {
     const handle =
       node.handleStyle === 'knob'
-        ? new Mesh(new SphereGeometry(0.026, 14, 10), material('hardware', '#202124', node.finish))
+        ? new Mesh(
+            new SphereGeometry(0.026, 14, 10),
+            magicMaterial({ key: 'hardware', explicit: '#202124', style }),
+          )
         : new Mesh(
-            new BoxGeometry(Math.max(0.12, node.dimensions[0] * 0.62), 0.018, 0.024),
-            material('hardware', '#202124', node.finish),
+            new BoxGeometry(Math.max(0.12, frame.width * 0.62), 0.018, 0.024),
+            magicMaterial({ key: 'hardware', explicit: '#202124', style }),
           )
     handle.name = `magic-${node.handleStyle}-handle`
+    // Corner-anchored frame: centre is `width / 2`, and the room-facing side
+    // is `-depth`. The knob sits off-centre toward the opening edge.
     handle.position.set(
-      node.handleStyle === 'knob' ? node.dimensions[0] * 0.3 : 0,
-      node.dimensions[1] * 0.48,
-      node.dimensions[2] / 2 + 0.018,
+      node.handleStyle === 'knob' ? frame.width * 0.8 : frame.width / 2,
+      frame.height * 0.48,
+      -(frame.depth + 0.018),
     )
     group.add(handle)
   }
 
   if (node.componentKind === 'cabinet' && node.subtype.includes('wall')) {
     const led = new Mesh(
-      new BoxGeometry(Math.max(0.08, node.dimensions[0] - 0.04), 0.012, 0.018),
-      material('shelf-light', '#ffe0a6', node.finish, true),
+      new BoxGeometry(Math.max(0.08, frame.width - 0.04), 0.012, 0.018),
+      magicMaterial({ key: 'shelf-light', explicit: '#ffe0a6', style, emissive: true }),
     )
     led.name = 'magic-shelf-led'
-    led.position.set(0, 0.008, node.dimensions[2] / 2 + 0.012)
+    // Under the cabinet (local y = 0 is its own underside) and just in front
+    // of the doors.
+    led.position.set(frame.width / 2, 0.008, -(frame.depth + 0.012))
     group.add(led)
   }
 
@@ -157,22 +293,53 @@ export function buildMagicComponentGeometry(node: MagicCabinetComponentNode): Gr
 export function buildMagicLayoutGeometry(node: MagicCabinetLayoutNode): Group {
   const group = new Group()
   group.name = 'magic-kitchen-layout'
+  const style: MagicStyleContext = {
+    finish: 'white',
+    cabinetTexture: node.cabinetTexture,
+    countertopMaterial: node.countertopMaterial,
+  }
 
-  const backsplash = new Mesh(
-    new BoxGeometry(node.width, node.backsplashHeight, 0.018),
-    new MeshStandardMaterial({ color: '#efe8dc', roughness: 0.78 }),
+  // MVP `KitchenAssembly` builds its own floor rather than inheriting the
+  // shell's. It is laid a hair above the house slab so the two never z-fight.
+  const floorPlan = floorMaterialPlan(node.floorType)
+  const floor = new Mesh(
+    new BoxGeometry(node.width, 0.004, node.depth),
+    magicMaterial({
+      key: `floor:${node.floorType}`,
+      style,
+      plan: floorPlan,
+      color: FLOOR_TEXTURES[node.floorType].fallbackColor,
+      size: [node.width, node.depth],
+      rotationRad: FLOOR_TEXTURES[node.floorType].rotationRad ?? 0,
+    }),
   )
-  backsplash.name = 'magic-backsplash'
-  backsplash.position.set(
-    node.width / 2,
-    node.counterHeight + node.backsplashHeight / 2,
-    -node.depth + 0.025,
-  )
-  group.add(backsplash)
+  floor.name = `magic-floor:${node.floorType}`
+  // The slab is already flat — `BoxGeometry(w, 0.004, d)` is the floor plane —
+  // so it takes no rotation; the plank direction is carried by the texture's
+  // own `rotationRad` instead.
+  floor.position.set(node.width / 2, 0.002, -node.depth / 2)
+  group.add(floor)
+
+  const backsplashPlan = backsplashMaterialPlan(node.backsplashMaterial)
+  if (backsplashPlan) {
+    const height = node.backsplashHeight
+    const backsplash = new Mesh(
+      new BoxGeometry(node.width, height, 0.018),
+      magicMaterial({
+        key: `backsplash:${node.backsplashMaterial}`,
+        style,
+        plan: backsplashPlan,
+        size: [node.width, height],
+      }),
+    )
+    backsplash.name = `magic-backsplash:${node.backsplashMaterial}`
+    backsplash.position.set(node.width / 2, node.counterHeight + height / 2, -node.depth + 0.025)
+    group.add(backsplash)
+  }
 
   const led = new Mesh(
     new BoxGeometry(node.width, 0.014, 0.022),
-    material('shelf-light', '#ffe0a6', 'white', true),
+    magicMaterial({ key: 'shelf-light', explicit: '#ffe0a6', style, emissive: true }),
   )
   led.name = 'magic-layout-work-light'
   led.position.set(node.width / 2, node.counterHeight + node.backsplashHeight, -node.depth + 0.015)

@@ -1,5 +1,12 @@
 import { BaseNode, nodeType, objectId } from '@pascal-app/core'
 import { z } from 'zod'
+import {
+  BACKSPLASH_MATERIALS,
+  CABINET_TEXTURES,
+  COUNTERTOP_MATERIALS,
+  DOOR_STYLES,
+  FLOOR_TYPES,
+} from './style'
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()])
 const Rotation = Vec3
@@ -40,6 +47,26 @@ export const MagicGeometryPrimitive = z.discriminatedUnion('kind', [
 ])
 export type MagicGeometryPrimitive = z.infer<typeof MagicGeometryPrimitive>
 
+/**
+ * The style knobs the Babylon designer owns and the deterministic engine has
+ * no field for. Shared verbatim between the layout node (where the user edits
+ * them, kitchen-wide) and every component node (where the geometry builder
+ * reads them, per-node). The layout's `reconcile` pushes an edit down to the
+ * components in the same gesture — see `parametrics.ts`.
+ */
+export const MagicKitchenStyle = {
+  doorStyle: z.enum(DOOR_STYLES).default('slab'),
+  cabinetTexture: z.enum(CABINET_TEXTURES).default('none'),
+  countertopMaterial: z.enum(COUNTERTOP_MATERIALS).default('quartz'),
+  /**
+   * Draw appliances with Pascal's own parametric builders (real fridge doors,
+   * hobs, faucets) instead of the engine's grey box. Off restores the box,
+   * which is what a BOM screenshot wants — the engine's dimensions are
+   * authoritative either way, they are what size the appliance.
+   */
+  applianceDetail: z.boolean().default(true),
+} as const
+
 export const MagicCatalogIdentity = z.object({
   productId: z.string(),
   sku: z.string(),
@@ -71,6 +98,13 @@ export const MagicCabinetLayoutNode = BaseNode.extend({
     .enum(['hero', 'workwall', 'detail', 'plan', 'elevation', 'breakaway'])
     .default('hero'),
   palette: z.enum(['sage-oak', 'oak-white', 'midnight', 'warm-minimal']).default('sage-oak'),
+  // Designer style. The layout owns the kitchen-wide value; the three shared
+  // keys are mirrored onto every component so geometry stays a pure function
+  // of its own node (`GeometrySystem` only re-runs a builder for the node it
+  // marked dirty, so reading these off the layout would not rebuild).
+  ...MagicKitchenStyle,
+  floorType: z.enum(FLOOR_TYPES).default('hardwood'),
+  backsplashMaterial: z.enum(BACKSPLASH_MATERIALS).default('white-metro-tile'),
 })
 export type MagicCabinetLayoutNode = z.infer<typeof MagicCabinetLayoutNode>
 
@@ -104,5 +138,6 @@ export const MagicCabinetComponentNode = BaseNode.extend({
   manuallyPinned: z.boolean().default(false),
   finish: z.enum(['sage', 'oak', 'quartz', 'black', 'white']).default('sage'),
   handleStyle: z.enum(['bar', 'knob', 'edge', 'none']).default('bar'),
+  ...MagicKitchenStyle,
 })
 export type MagicCabinetComponentNode = z.infer<typeof MagicCabinetComponentNode>
