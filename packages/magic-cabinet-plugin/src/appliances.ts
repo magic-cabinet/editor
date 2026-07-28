@@ -20,6 +20,12 @@ import type { MagicCabinetComponentNode } from './schema'
 import type { MagicSlotId } from './slots'
 
 /**
+ * The engine's countertop slab, 1.5in — `heightIn` on every countertop prism it
+ * emits. The sink is undermounted against its underside.
+ */
+const COUNTERTOP_THICKNESS_M = 1.5 * 0.0254
+
+/**
  * How much of the hood's box the angled canopy takes; the flue fills the rest.
  * Chosen to read as a chimney hood, not measured off the MVP — the engine
  * gives the hood one undivided box, so nothing upstream fixes the split.
@@ -319,10 +325,17 @@ export function addNativeAppliances(
         )
         break
       case 'appliance': {
-        // A range's oven occupies the lower two-thirds; a standalone oven or
-        // microwave gets the whole face.
-        const isRange = appliances.length > 1
-        const faceHeight = isRange ? height * 0.66 : height
+        // A range's oven fills the box up to the cooktop, same as a standalone
+        // oven or microwave fills its own.
+        //
+        // The two-thirds this used to reserve was for a cooktop that does not
+        // need it: `addCooktopCompartment` takes `topY` and builds UPWARD from
+        // it (glass at `topY + 0.006`, burners and grates above that), so the
+        // only thing under the cooktop is the oven. Reserving 34% of a 36.5in
+        // range left a 12.4in band of nothing between the oven fascia (top at
+        // 24.09in) and the cooktop frame (bottom at 36.50in) — a hole through
+        // the middle of the range's face.
+        const faceHeight = height
         addApplianceCompartment(
           frame,
           cabinet,
@@ -380,9 +393,28 @@ export function addNativeAppliances(
         break
       case 'sink': {
         const bowls = sinkBowls(appliance.layout, openingWidth, openingDepth)
-        // The engine sizes a sink component as the basin itself, so its own
-        // top face is the countertop plane the rim sits in.
-        addSinkCompartment(frame, bowls, 0, 0, height, 0.038, index, materials.appliance)
+        // `addSinkCompartment` wants the countertop's UNDERSIDE — it hangs the
+        // basin below `rimY` and stands the faucet at `rimY + thickness`.
+        //
+        // The sink component's origin already IS that underside: the engine
+        // seats it at `positionIn.y = 34.5in`, which is the top of the base
+        // cabinets and so the bottom of the slab (`adapter.ts`
+        // WHOLE_BOX_VERTICAL_ANCHOR). Rim at 0, faucet deck one slab up at the
+        // 36in worktop.
+        //
+        // Passing the component height instead put the rim 8in above the
+        // counter: a basin standing on the worktop with the faucet in the air
+        // above it, next to the hole the engine had cut for it.
+        addSinkCompartment(
+          frame,
+          bowls,
+          0,
+          0,
+          0,
+          COUNTERTOP_THICKNESS_M,
+          index,
+          materials.appliance,
+        )
         break
       }
       case 'pantry':

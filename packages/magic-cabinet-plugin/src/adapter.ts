@@ -159,25 +159,59 @@ function componentPosition(
 }
 
 /**
- * An appliance arrives as its whole envelope in one box sitting at the
+ * Some components arrive as their whole envelope in one box sitting at the
  * component-local origin (`packages/engine .../index.ts:404`) — but a box's
  * transform is its CENTRE everywhere else in this contract, and the component
  * frame is corner-anchored (`appliances.ts:180 nativeFrame` builds against
  * `x ∈ [0, W]`, `y ∈ [0, H]`). Taken literally, a 66in refrigerator renders
  * `y ∈ [-33, +33]`: half of it below the floor, and half a footprint out of
- * the wall it is supposed to stand against.
+ * the wall it is supposed to stand against, and the island slab lands half its
+ * own width to one side of the island it belongs on. Babylon reads the same
+ * `positionIn` as a min corner in X/Z — `KitchenAssembly.tsx:855-859` centres
+ * the box at `position.x + width / 2`, `position.z + depth / 2` — so corner in
+ * X/Z is not a guess either.
  *
- * `applianceDetail` is on by default, and the native builders replace this box
- * rather than covering it, so the defect only shows with detail off. Re-seat
- * the envelope on the centre of the corner-anchored frame so both paths agree.
+ * `WHOLE_BOX_VERTICAL_ANCHOR` says which face of the box `positionIn.y` names,
+ * because the engine does not use one rule. The reference is the Babylon
+ * renderer at the engine's provenance commit (`69ac3d37`), NOT the engine's own
+ * export — see `adaptPolygon` for why that distinction matters.
  *
- * Narrow on purpose: it fires only for the exact shape observed — an appliance
- * envelope, in component-local space, at the origin. Any other primitive is
- * left alone, so an engine that starts emitting appliance sub-geometry (or
- * seats this box correctly itself) is not silently re-offset.
+ *   - `bottom` — a floor-standing appliance is at `positionIn.y = 0`, and the
+ *     hood at 66in is the underside of its canopy.
+ *   - `bottom` — the `countertop` island slab is at 34.5in for a 1.5in box, and
+ *     34.5in is the top of the base cabinets, not the top of the slab.
+ *     `KitchenAssembly.tsx:857` centres that same box at
+ *     `position.y + thickness / 2`, and its comment says so outright: "y is top
+ *     of base cabinets + half thickness". So the slab spans 34.5..36.0in — the
+ *     36in finished counter height — seated ON the 34.5in cabinet run.
+ *   - `top` — the `sink` is at 34.5in for an 8in box, and by the rule above
+ *     34.5in is now the countertop's UNDERSIDE. Hanging the envelope down from
+ *     there is an undermount basin dropping into the sink base, which is what
+ *     the opening the engine cuts for it (`holesIn`, the sink footprint inset
+ *     0.5in per side) is for. Bottom-up would be a basin standing on the
+ *     worktop next to its own unused hole.
+ *
+ * Narrow on purpose: it fires only for the exact shape observed — the whole
+ * component, in component-local space, at the origin. `panel` is deliberately
+ * absent even though every island panel has that shape: a panel's `positionIn`
+ * really is its centre (an island panel is at `y = 17.25` for a 34.5in box), so
+ * re-seating one would break what already renders correctly.
  */
-function isApplianceEnvelopeAtOrigin(primitive: BoxGeometry, component: KitchenComponent): boolean {
-  if (component.kind !== 'appliance' || primitive.space !== 'component-local') return false
+const WHOLE_BOX_VERTICAL_ANCHOR: Record<string, 'top' | 'bottom'> = {
+  appliance: 'bottom',
+  'appliance:sink': 'top',
+  countertop: 'bottom',
+}
+
+function wholeBoxVerticalAnchor(component: KitchenComponent): 'top' | 'bottom' | undefined {
+  return (
+    WHOLE_BOX_VERTICAL_ANCHOR[`${component.kind}:${component.subtype}`] ??
+    WHOLE_BOX_VERTICAL_ANCHOR[component.kind]
+  )
+}
+
+function isWholeComponentBoxAtOrigin(primitive: BoxGeometry, component: KitchenComponent): boolean {
+  if (primitive.space !== 'component-local') return false
   const p = primitive.transform.positionIn
   if (p.x !== 0 || p.y !== 0 || p.z !== 0) return false
   const d = primitive.dimensionsIn
@@ -194,11 +228,13 @@ function primitiveLocalPosition(
   const c = componentAnchorIn(component)
   const local = primitive.space === 'world' ? worldToComponentLocal(p, component) : p
   const y = primitive.space === 'world' ? p.y - c.y : p.y
-  if (primitive.kind === 'box' && isApplianceEnvelopeAtOrigin(primitive, component)) {
+  const anchor = wholeBoxVerticalAnchor(component)
+  if (primitive.kind === 'box' && anchor && isWholeComponentBoxAtOrigin(primitive, component)) {
+    const e = component.dimensionsIn
     return [
-      meters(component.dimensionsIn.x / 2),
-      meters(component.dimensionsIn.y / 2),
-      meters((invertZ ? -1 : 1) * (component.dimensionsIn.z / 2)),
+      meters(e.x / 2),
+      meters(anchor === 'top' ? -e.y / 2 : e.y / 2),
+      meters((invertZ ? -1 : 1) * (e.z / 2)),
     ]
   }
   return [meters(local.x), meters(y), meters(invertZ ? -local.z : local.z)]
@@ -225,6 +261,36 @@ function adaptBox(
   }
 }
 
+/**
+ * The one place the vendored engine's own export is wrong and has to be
+ * corrected rather than copied.
+ *
+ * `componentsFromScene` emits a countertop prism at
+ * `baseYIn = countertop.position.y - countertop.thickness`
+ * (`packages/engine/src/index.ts:361` @ `69ac3d37`), i.e. one slab BELOW the
+ * component origin. Every consumer on the Babylon side reads the same field the
+ * other way — the slab starts at `position.y` and rises:
+ *
+ *   - `mesh-builders.ts:473` — `createExtrudedPolygon` puts the top at
+ *     `y + thickness`, having extruded down from it.
+ *   - `KitchenAssembly.tsx:857` — the box branch centres at
+ *     `position.y + thickness / 2`.
+ *   - `KitchenAssembly.tsx:943` — wall cabinets hang off
+ *     `position.y + thickness`, the worktop's top face.
+ *   - `placement.ts:443`, `cross-view-matrix.ts:378`, `render-room-svg.ts:581`
+ *     — all three bound the counter `position.y .. position.y + thickness`.
+ *
+ * Six sites against one. Copying `baseYIn` faithfully sinks every perimeter
+ * counter 1.5in into the top of its own cabinets and leaves a 34.5in finished
+ * counter instead of the 36in the cabinet run is built for. Re-basing to the
+ * component anchor restores Babylon's span without touching the outline, the
+ * holes, or the thickness.
+ *
+ * Gated on `countertop` because that is the only shape measured against the
+ * renderer, and — as of `69ac3d37` — the only kind the engine emits a
+ * polygon-prism for at all (one `kind: "polygon-prism"` in `index.ts`). A
+ * future prism from some other kind should be checked, not silently re-based.
+ */
 function adaptPolygon(
   primitive: PolygonPrismGeometry,
   component: KitchenComponent,
@@ -240,7 +306,7 @@ function adaptPolygon(
     outlineM: primitive.outlineIn.map(localPoint),
     holesM: (primitive.holesIn ?? []).map((hole) => hole.outlineIn.map(localPoint)),
     heightM: meters(primitive.heightIn),
-    baseYM: meters(primitive.baseYIn - c.y),
+    baseYM: component.kind === 'countertop' ? 0 : meters(primitive.baseYIn - c.y),
     materialKey: primitive.materialKey,
     ...(primitive.color ? { color: primitive.color } : {}),
   }

@@ -661,7 +661,18 @@ function addFridgeInterior(
   group.add(lamp)
 }
 
-function addFridgeDoorCues(leaf: Group, width: number, height: number, name: string) {
+/** A door has to be at least this big to carry a through-the-door dispenser. */
+function canHostDispenser(width: number, height: number) {
+  return width >= 0.28 && height >= 0.72
+}
+
+function addFridgeDoorCues(
+  leaf: Group,
+  width: number,
+  height: number,
+  name: string,
+  withDispenser: boolean,
+) {
   const badge = stampSlot(
     new Mesh(
       roundedButtonGeometry(Math.min(0.09, width * 0.24), 0.018, 0.004, 0.004),
@@ -673,7 +684,7 @@ function addFridgeDoorCues(leaf: Group, width: number, height: number, name: str
   badge.position.set(0, height / 2 - 0.09, 0.025)
   leaf.add(badge)
 
-  if (width < 0.28 || height < 0.72) return
+  if (!withDispenser || !canHostDispenser(width, height)) return
 
   const dispenserWidth = Math.min(0.16, width * 0.42)
   const dispenserHeight = Math.min(0.24, height * 0.16)
@@ -717,6 +728,7 @@ function addFridgeLeaf(
   name: string,
   section: FridgeSection,
   openScale: number,
+  withDispenser: boolean,
 ) {
   const hingeGroup = new Group()
   hingeGroup.name = `${name}-hinge`
@@ -759,7 +771,7 @@ function addFridgeLeaf(
     `${name}-brushed-center`,
     'appliance',
   )
-  addFridgeDoorCues(leaf, width, height, name)
+  addFridgeDoorCues(leaf, width, height, name, withDispenser)
 
   const gasketWidth = Math.max(0.008, Math.min(width, height) * 0.018)
   addBox(
@@ -1087,16 +1099,38 @@ export function addFridgeCompartment(
   )
 
   const doorGap = node.frontGap
-  for (const layout of layoutRows) {
-    const doorWidth = Math.max(0.01, shellWidth * layout.widthFraction - doorGap * 2)
-    const doorHeight = Math.max(0.01, layout.height - doorGap * 2)
+  const doorRows = layoutRows.map((layout) => ({
+    layout,
+    width: Math.max(0.01, shellWidth * layout.widthFraction - doorGap * 2),
+    height: Math.max(0.01, layout.height - doorGap * 2),
+  }))
+  /*
+   * A fridge carries at most ONE through-the-door dispenser, and it is picked
+   * here rather than inside the door builder — the size test alone cannot do
+   * it. On a stacked fridge the short freezer door fails that test, so exactly
+   * one dispenser came out by luck; on a side-by-side both doors are the same
+   * half-width full-height leaf, so both passed and the fridge grew two ice
+   * dispensers side by side.
+   *
+   * Preference order matches the real appliance: the freezer door owns the
+   * dispenser when it is a full-height leaf (side-by-side), and on stacked
+   * layouts — where the freezer is a shallow drawer or a short upper door —
+   * it falls to the fresh-food door, which is where those models put it.
+   */
+  const dispenserRow =
+    doorRows.find(
+      (row) => row.layout.section === 'freezer' && canHostDispenser(row.width, row.height),
+    ) ?? doorRows.find((row) => canHostDispenser(row.width, row.height))
+
+  for (const row of doorRows) {
+    const { layout } = row
     const doorCenterX = shellWidth * layout.xFraction
     const doorCenterY = shellCenterY + layout.y
     addFridgeLeaf(
       group,
       materials,
-      doorWidth,
-      doorHeight,
+      row.width,
+      row.height,
       layout.hinge,
       doorCenterX,
       doorCenterY,
@@ -1104,6 +1138,7 @@ export function addFridgeCompartment(
       `${name}-door-${layout.key}`,
       layout.section,
       node.operationState ?? 0,
+      row === dispenserRow,
     )
   }
 }

@@ -186,16 +186,29 @@ describe('an appliance fills the box the engine sized', () => {
     // origin, but a box transform is its CENTRE everywhere else in the
     // contract. Read literally, a 66in refrigerator renders y ∈ [-33, +33] —
     // half of it under the floor.
+    //
+    // Which face `positionIn.y` names is NOT uniform across appliances. A
+    // floor-standing appliance stands ON its origin. The sink HANGS FROM its
+    // origin: the engine seats it at the worktop plane and cuts a hole through
+    // that worktop for it, so its envelope belongs under the counter. Read
+    // bottom-up instead, an 8in basin stands on the quartz with the faucet in
+    // the air above it, beside the opening cut for nothing.
+    let hanging = 0
     for (const node of appliancesOf(generateKitchen(MAGIC_KITCHEN_DEFAULT_INPUT))) {
       const [width, height, depth] = node.dimensions
+      const hangsFromOrigin = node.subtype === 'sink'
+      if (hangsFromOrigin) hanging += 1
       const box = localBox(node, false)
       expect(box.min.x, `${node.subtype} -x`).toBeCloseTo(0, 6)
-      expect(box.min.y, `${node.subtype} floor`).toBeCloseTo(0, 6)
+      expect(box.min.y, `${node.subtype} floor`).toBeCloseTo(hangsFromOrigin ? -height : 0, 6)
       expect(box.min.z, `${node.subtype} front`).toBeCloseTo(-depth, 6)
       expect(box.max.x, `${node.subtype} +x`).toBeCloseTo(width, 6)
-      expect(box.max.y, `${node.subtype} top`).toBeCloseTo(height, 6)
+      expect(box.max.y, `${node.subtype} top`).toBeCloseTo(hangsFromOrigin ? 0 : height, 6)
       expect(box.max.z, `${node.subtype} wall`).toBeCloseTo(0, 6)
     }
+    // Guards the exception: with no sink in the kitchen the hanging branch
+    // goes untested rather than vacuously passing.
+    expect(hanging).toBeGreaterThan(0)
   })
 
   test('the anchor shift inverts, so a pinned edit does not walk the appliance', () => {
