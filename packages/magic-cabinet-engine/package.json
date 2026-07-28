@@ -1,0 +1,30 @@
+{
+  "name": "@magic-cabinet/engine",
+  "version": "0.1.0",
+  "description": "Renderer-neutral deterministic Magic Cabinet kitchen engine",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./src/public.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/public.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/contracts.ts",
+    "src/public.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "magicCabinet": {
+    "sourceRepository": "https://github.com/magic-cabinet/mvp",
+    "sourceCommit": "a28b8a0d777cbbbcf7fa1f46a3d2407bb6e5f65e",
+    "bundleSha256": "d893cc884c79f9b73e21777d79417f97a74c6db20e11024d144174ffd8675df1"
+  }
+}
