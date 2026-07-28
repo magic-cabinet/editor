@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  createCommandEnvelope,
-  createLocalCreationContext,
-  freezeCreationContext,
-} from './context'
+import { createCommandEnvelope, createLocalCreationContext, freezeCreationContext } from './context'
 
 describe('creation context', () => {
   test('creates a complete command envelope without conflating document identities', () => {

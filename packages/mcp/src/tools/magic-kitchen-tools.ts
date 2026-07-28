@@ -26,7 +26,18 @@ import { ErrorCode, throwMcpError } from './errors'
 import { publishLiveSceneSnapshot } from './live-sync'
 
 const presentationSchema = z.enum(['hero', 'workwall', 'detail', 'plan', 'elevation', 'breakaway'])
-const paletteSchema = z.enum(['sage-oak', 'oak-white', 'midnight', 'warm-minimal'])
+// `designer-white` is the MVP's `DEFAULT_DESIGN_STYLE.cabinetFinish` —
+// `"white"`, applied to the whole kitchen, because the MVP has no
+// per-component finish at all (`DesignerCanvas.tsx:292` hands `KitchenAssembly`
+// one `cabinetColor`). The other four are Pascal's own showroom palettes and
+// stay available as explicit choices.
+const paletteSchema = z.enum([
+  'designer-white',
+  'sage-oak',
+  'oak-white',
+  'midnight',
+  'warm-minimal',
+])
 const handleSchema = z.enum(['bar', 'knob', 'edge', 'none'])
 
 type Palette = z.infer<typeof paletteSchema>
@@ -89,6 +100,14 @@ function componentFinish(component: MagicComponent, palette: Palette): MagicComp
     return 'black'
   }
   if (component.componentKind === 'countertop') return 'quartz'
+
+  // The designer default is one colour for every body panel — no split by
+  // height or subtype. This has to come first: the plugin's own
+  // `componentFinish` was corrected to return `white`, and this function
+  // overrides it on every scene created through `start_magic_kitchen_session`,
+  // so a `sage-oak` default here silently reinstated the showroom palette one
+  // layer up from the fix.
+  if (palette === 'designer-white') return 'white'
 
   const wallMounted = component.subtype.includes('wall') || component.position[1] > 1.2
   if (palette === 'midnight') return 'black'
@@ -283,7 +302,7 @@ export function registerMagicKitchenTools(server: McpServer, operations: SceneOp
         name: z.string().min(1).max(200).default('Magic Kitchen House'),
         isPrivate: z.boolean().default(true),
         presentation: presentationSchema.default('hero'),
-        palette: paletteSchema.default('sage-oak'),
+        palette: paletteSchema.default('designer-white'),
       },
     },
     async ({ name, isPrivate, presentation, palette }) => {

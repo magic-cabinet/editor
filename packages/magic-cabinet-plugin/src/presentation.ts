@@ -18,6 +18,23 @@ export type MagicPilotPresentation = {
   levelMode: 'solo'
 }
 
+/**
+ * `wallMode` is not a style knob — it decides whether the house exists on
+ * screen. `wall-cutout.tsx:36-40` reads it directly:
+ *
+ *   'up'      -> hideWall = false          every wall drawn
+ *   'down'    -> hideWall = true           every wall hidden, unconditionally
+ *   'cutaway' -> hide the walls whose exterior face points away from the camera
+ *
+ * Four of the six presets below shipped as `'down'`, so a session started
+ * through `start_magic_kitchen_session` drew the kitchen standing in an open
+ * field — 12 walls, 4 doors and 5 windows all present in the graph and all
+ * suppressed at draw time. `elevation` was the clearest case: an elevation is
+ * a view *of* a wall, and it hid the wall.
+ *
+ * `'down'` is now only on `plan`, which is the 2D floor plan and is the one
+ * view that genuinely wants the walls out of the way.
+ */
 export const MAGIC_PILOT_PRESENTATIONS: readonly MagicPilotPresentation[] = [
   {
     id: 'hero',
@@ -30,7 +47,7 @@ export const MAGIC_PILOT_PRESENTATIONS: readonly MagicPilotPresentation[] = [
       fov: 43,
     },
     sceneTheme: 'paper',
-    wallMode: 'cutaway',
+    wallMode: 'up',
     levelMode: 'solo',
   },
   {
@@ -44,7 +61,7 @@ export const MAGIC_PILOT_PRESENTATIONS: readonly MagicPilotPresentation[] = [
       viewWidth: 5.2,
     },
     sceneTheme: 'paper',
-    wallMode: 'down',
+    wallMode: 'cutaway',
     levelMode: 'solo',
   },
   {
@@ -58,7 +75,7 @@ export const MAGIC_PILOT_PRESENTATIONS: readonly MagicPilotPresentation[] = [
       fov: 38,
     },
     sceneTheme: 'twilight',
-    wallMode: 'down',
+    wallMode: 'cutaway',
     levelMode: 'solo',
   },
   {
@@ -86,7 +103,7 @@ export const MAGIC_PILOT_PRESENTATIONS: readonly MagicPilotPresentation[] = [
       viewWidth: 4.6,
     },
     sceneTheme: 'paper',
-    wallMode: 'down',
+    wallMode: 'up',
     levelMode: 'solo',
   },
   {

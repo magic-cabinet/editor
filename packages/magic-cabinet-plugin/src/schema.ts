@@ -116,7 +116,13 @@ export const MagicCabinetLayoutNode = BaseNode.extend({
   activePresentation: z
     .enum(['hero', 'workwall', 'detail', 'plan', 'elevation', 'breakaway'])
     .default('hero'),
-  palette: z.enum(['sage-oak', 'oak-white', 'midnight', 'warm-minimal']).default('sage-oak'),
+  // `designer-white` is the MVP default — one white for every body panel. The
+  // other four are Pascal's showroom palettes. See `componentFinish` in
+  // `packages/mcp/src/tools/magic-kitchen-tools.ts`, which is what actually
+  // applies a palette to a scene.
+  palette: z
+    .enum(['designer-white', 'sage-oak', 'oak-white', 'midnight', 'warm-minimal'])
+    .default('designer-white'),
   // Designer style. The layout owns the kitchen-wide value; the three shared
   // keys are mirrored onto every component so geometry stays a pure function
   // of its own node (`GeometrySystem` only re-runs a builder for the node it

@@ -177,6 +177,41 @@ describe('Magic Kitchen semantic tools', () => {
     ).toEqual(movedPosition)
   })
 
+  test('a default session is the designer white, not the showroom palette', async () => {
+    // The plugin's `componentFinish` was corrected to return `white` for every
+    // body component — and this file has its own `componentFinish(component,
+    // palette)` that overrides it on every scene this tool creates. While the
+    // default here was `sage-oak` it reinstated the sage-walls/oak-bases
+    // showroom palette one layer above the fix, so the shipped kitchen was
+    // never the designer's default no matter what the plugin said.
+    await client.callTool({ name: 'start_magic_kitchen_session', arguments: {} })
+
+    const bodies = (
+      Object.values(operations.getNodes()) as unknown as MagicCabinetComponentNode[]
+    ).filter(
+      (node) =>
+        node.type === 'magic-cabinet:component' &&
+        node.componentKind !== 'countertop' &&
+        !node.componentKind.startsWith('appliance'),
+    )
+
+    expect(bodies.length).toBeGreaterThan(20)
+    expect([...new Set(bodies.map((node) => node.finish))]).toEqual(['white'])
+  })
+
+  test('the showroom palettes are still reachable explicitly', async () => {
+    await client.callTool({
+      name: 'start_magic_kitchen_session',
+      arguments: { palette: 'sage-oak' },
+    })
+    const finishes = new Set(
+      (Object.values(operations.getNodes()) as unknown as MagicCabinetComponentNode[])
+        .filter((node) => node.type === 'magic-cabinet:component')
+        .map((node) => node.finish),
+    )
+    expect(finishes.has('sage')).toBe(true)
+  })
+
   test('refuses to pin a cabinet dragged out of the room', async () => {
     // The other half of the rule above, and the reason this suite went red on
     // the layout swap rather than on any change to pinning: a pin is only
