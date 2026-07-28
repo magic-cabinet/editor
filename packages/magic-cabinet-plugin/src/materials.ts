@@ -22,6 +22,20 @@ import {
 
 const INCH_TO_METER = 0.0254
 
+/**
+ * Every MVP texture is created with `anisotropicFilteringLevel = maxAnisotropy`
+ * (`cabinet-scene-mesh.ts:207,230,312`); three defaults to 1, which is the
+ * classic shimmer-at-a-grazing-angle artifact on a floor or a long counter run.
+ *
+ * The MVP can ask its engine for the real maximum because it builds materials
+ * with a `Scene` in hand. `def.geometry` has no renderer, so we ask for the
+ * WebGPU spec ceiling and let three clamp: the WebGL path takes
+ * `min(texture.anisotropy, capabilities.getMaxAnisotropy())`
+ * (`WebGLTextures.js:702`) and the WebGPU path passes it to the sampler
+ * descriptor, whose own maximum is 16.
+ */
+const MAX_ANISOTROPY = 16
+
 const MATERIAL_COLORS: Record<string, string> = {
   appliance: '#18191b',
   black: '#18191b',
@@ -68,31 +82,57 @@ export function materialColor(key: string, explicit: string | undefined, finish:
 // PBR constants ported from the web MVP's single-cabinet Babylon showcase
 // (`apps/web/src/components/cabinet-scene-mesh.ts`) — same jpgs, same
 // roughness tiers, same normal-map strengths.
-const WOOD_LIGHT = `${TEXTURE_ROOT}/finishes/wood-light`
-const WOOD_DARK = `${TEXTURE_ROOT}/finishes/wood-dark`
+/**
+ * The oak grain photo.
+ *
+ * The two texture *directories* are mislabeled at the asset level: the photo
+ * in `wood-light/` is a dark walnut and the photo in `wood-dark/` is a light
+ * oak. The MVP says so in caps (`cabinet-colors.ts:31`) and inverts its own
+ * finish→directory map to compensate — `oak` and `natural` both resolve to
+ * `wood-dark/color.jpg`. We inherited the label without the compensation, so
+ * `oak` was wearing the walnut photo: mean luminance of the two served files
+ * is 34.9 (`wood-light`) against 147.5 (`wood-dark`), a 4.2× gap.
+ *
+ * Named for what the directory *contains* so the inversion cannot be
+ * reintroduced by reading the path.
+ */
+const WOOD_OAK = `${TEXTURE_ROOT}/finishes/wood-dark`
 const PAINT_ALBEDO = `${TEXTURE_ROOT}/cabinets/painted.jpg`
 const PAINT_NORMAL = `${TEXTURE_ROOT}/finishes/paint-normal.jpg`
 
 // MVP `getFinishContext`: gloss 0.3 / matte 0.8 / paint 0.55 / wood 0.42.
 const WOOD_ROUGHNESS = 0.42
 const PAINT_ROUGHNESS = 0.55
-// MVP `applyWoodMaterial`: bump.level 0.26 light, 0.16 dark.
-const WOOD_NORMAL_SCALE = { light: 0.26, dark: 0.16 }
+// MVP `applyWoodMaterial`: `bump.level = isDarkWalnut ? 0.16 : 0.26`, and
+// `isDarkWalnut` tests the *directory* (`/wood-light/`). The oak photo is the
+// other branch, so it takes 0.26.
+const WOOD_NORMAL_SCALE = 0.26
 const PAINT_NORMAL_SCALE = 0.2
 // MVP derives the cabinet-body UV repeat from panel size in inches over a 46"
 // reference, then swaps u/v and rotates 90° to run the grain along the panel.
 const UV_REFERENCE_M = 46 * INCH_TO_METER
+// `applyWoodMaterial` gives the oak photo a coarser reference than the paint
+// base: `max(0.15, panel.width / 58)` where `isLightOak`.
+const WOOD_UV_REFERENCE_M = 58 * INCH_TO_METER
+const WOOD_UV_MIN = 0.15
+// `applyPaintBump` sizes the brushed-paint normal against the panel in inches
+// over 5", floored at 3 — deliberately independent of the albedo repeat, and
+// 5–15× finer than it. Reusing the albedo repeat here is what made painted
+// fronts read blotchy instead of finely brushed.
+const PAINT_BUMP_REFERENCE_M = 5 * INCH_TO_METER
+const PAINT_BUMP_MIN = 3
 
-type FinishSurface =
-  | { kind: 'wood'; dir: string; tone: 'light' | 'dark' }
-  | { kind: 'paint' }
-  | { kind: 'bare' }
+type FinishSurface = { kind: 'wood'; dir: string } | { kind: 'paint' } | { kind: 'bare' }
 
 /** Which physical surface a `finish` enum value represents. */
 function finishSurface(finish: string): FinishSurface {
-  if (finish === 'oak') return { kind: 'wood', dir: WOOD_LIGHT, tone: 'light' }
-  if (finish === 'black') return { kind: 'wood', dir: WOOD_DARK, tone: 'dark' }
-  if (finish === 'sage' || finish === 'white') return { kind: 'paint' }
+  if (finish === 'oak') return { kind: 'wood', dir: WOOD_OAK }
+  // `black` is a *painted* finish in the MVP, not a wood one — `cabinet-colors.ts`
+  // resolves it to `/textures/cabinets/painted.jpg` like every other paint. It
+  // used to map to a wood directory here, which put grain on a black cabinet.
+  // (Appliances also carry `finish: 'black'`, but their material keys are
+  // excluded by `takesBodyFinish`, so this never reached them.)
+  if (finish === 'black' || finish === 'sage' || finish === 'white') return { kind: 'paint' }
   return { kind: 'bare' }
 }
 
@@ -110,6 +150,23 @@ export type MagicMaterialPlan = {
    * slab reads at the same scale in Pascal as it does in the designer.
    */
   tilingM: [number, number] | null
+  /**
+   * How the normal map tiles.
+   *
+   * `panel` reuses the albedo repeat, which is right for wood — the MVP's
+   * `configureTexture` applies one repeat to the albedo, normal and roughness
+   * siblings together. `paint-bump` is the MVP's `applyPaintBump`, which sizes
+   * the brushed-paint normal on its own much finer scale and does *not* take
+   * the u/v swap or the 90° rotation the cabinet-body albedo takes.
+   */
+  normalTiling: 'panel' | 'paint-bump'
+  /**
+   * Per-surface override of the albedo repeat reference and floor, for the one
+   * surface that has them: the oak photo tiles over 58" with a 0.15 floor
+   * where everything else uses 46" and 0.2.
+   */
+  uvReferenceM: number
+  uvMin: number
 }
 
 export type MagicStyleContext = {
@@ -127,6 +184,9 @@ function planFor(texture: SurfaceTexture, roughness: number): MagicMaterialPlan 
     roughness,
     metalness: 0,
     tilingM: [texture.tiling.widthIn * INCH_TO_METER, texture.tiling.depthIn * INCH_TO_METER],
+    normalTiling: 'panel',
+    uvReferenceM: UV_REFERENCE_M,
+    uvMin: 0.2,
   }
 }
 
@@ -150,6 +210,9 @@ export function magicMaterialPlan(
     roughness: normalized.includes('quartz') ? 0.32 : 0.68,
     metalness: isHardware ? 0.72 : 0,
     tilingM: null,
+    normalTiling: 'panel',
+    uvReferenceM: UV_REFERENCE_M,
+    uvMin: 0.2,
   }
 
   if (normalized.startsWith('countertop:')) {
@@ -182,14 +245,17 @@ export function magicMaterialPlan(
   if (surface.kind === 'wood') {
     plan.map = `${surface.dir}/color.jpg`
     plan.normalMap = `${surface.dir}/normal.jpg`
-    plan.normalScale = WOOD_NORMAL_SCALE[surface.tone]
+    plan.normalScale = WOOD_NORMAL_SCALE
     plan.roughnessMap = `${surface.dir}/roughness.jpg`
     plan.roughness = WOOD_ROUGHNESS
+    plan.uvReferenceM = WOOD_UV_REFERENCE_M
+    plan.uvMin = WOOD_UV_MIN
   } else if (surface.kind === 'paint') {
     plan.map = PAINT_ALBEDO
     plan.normalMap = PAINT_NORMAL
     plan.normalScale = PAINT_NORMAL_SCALE
     plan.roughness = PAINT_ROUGHNESS
+    plan.normalTiling = 'paint-bump'
   }
   return plan
 }
@@ -252,18 +318,31 @@ function texture(
   map.repeat.set(rotate ? repeatV : repeatU, rotate ? repeatU : repeatV)
   map.rotation = rotate ? Math.PI / 2 : rotationRad
   map.center.set(0.5, 0.5)
+  map.anisotropy = MAX_ANISOTROPY
   if (srgb) map.colorSpace = SRGBColorSpace
   textureCache.set(cacheKey, map)
   return map
 }
 
 /** MVP: `uScale = max(0.2, panel.width / 46)`, same for height. */
-function uvRepeat(
+export function uvRepeat(
   size: readonly [number, number],
-  tilingM: [number, number] | null,
+  plan: MagicMaterialPlan,
 ): [number, number] {
+  const { tilingM } = plan
   if (tilingM) return [size[0] / tilingM[0], size[1] / tilingM[1]]
-  return [Math.max(0.2, size[0] / UV_REFERENCE_M), Math.max(0.2, size[1] / UV_REFERENCE_M)]
+  return [
+    Math.max(plan.uvMin, size[0] / plan.uvReferenceM),
+    Math.max(plan.uvMin, size[1] / plan.uvReferenceM),
+  ]
+}
+
+/** MVP `applyPaintBump`: `uScale = max(3, panel.width / 5)`, same for height. */
+export function paintBumpRepeat(size: readonly [number, number]): [number, number] {
+  return [
+    Math.max(PAINT_BUMP_MIN, size[0] / PAINT_BUMP_REFERENCE_M),
+    Math.max(PAINT_BUMP_MIN, size[1] / PAINT_BUMP_REFERENCE_M),
+  ]
 }
 
 const materialCache = new Map<string, MeshStandardMaterial>()
@@ -293,8 +372,12 @@ export function magicMaterial(request: MaterialRequest): MeshStandardMaterial {
   } = request
   const plan = request.plan ?? magicMaterialPlan(key, style)
   const color = request.color ?? materialColor(key, explicit, style.finish)
-  const [repeatU, repeatV] = uvRepeat(size, plan.tilingM)
+  const [repeatU, repeatV] = uvRepeat(size, plan)
   const rotate = plan.tilingM === null
+  // The paint bump's repeat is floored at 3 where the albedo's is floored at
+  // 0.2, so two panels can share an albedo repeat and need different bumps.
+  const paintBump = plan.normalTiling === 'paint-bump'
+  const [normalU, normalV] = paintBump ? paintBumpRepeat(size) : [repeatU, repeatV]
   const cacheKey = [
     key,
     color,
@@ -305,6 +388,8 @@ export function magicMaterial(request: MaterialRequest): MeshStandardMaterial {
     plan.map ?? '',
     repeatU.toFixed(3),
     repeatV.toFixed(3),
+    normalU.toFixed(3),
+    normalV.toFixed(3),
     rotationRad,
   ].join('|')
   const cached = materialCache.get(cacheKey)
@@ -319,7 +404,19 @@ export function magicMaterial(request: MaterialRequest): MeshStandardMaterial {
   })
   if (plan.map) built.map = texture(plan.map, repeatU, repeatV, true, rotate, rotationRad)
   if (plan.normalMap) {
-    const normal = texture(plan.normalMap, repeatU, repeatV, false, rotate, rotationRad)
+    // The brushed-paint normal is sized on its own scale and takes neither the
+    // u/v swap nor the 90° rotation — `applyPaintBump` sets `uScale` from the
+    // panel width directly and never touches `wAng`. Wood keeps the albedo's
+    // repeat and rotation, which is what `configureTexture` applies to the
+    // colour, normal and roughness siblings together.
+    const normal = texture(
+      plan.normalMap,
+      normalU,
+      normalV,
+      false,
+      paintBump ? false : rotate,
+      paintBump ? 0 : rotationRad,
+    )
     if (normal) {
       built.normalMap = normal
       built.normalScale.setScalar(plan.normalScale)

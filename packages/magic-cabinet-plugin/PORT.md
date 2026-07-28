@@ -314,3 +314,32 @@ half below the floor. They do not; the native builders bottom-anchor correctly.
   host renderer's job, not the plugin's.
 - `def.tool` / `def.preview`: no hand placement yet. The engine is the placement
   authority today; `plugin-trees` upstream is the reference if that changes.
+- **`walnut` / `espresso` finishes.** Pascal's finish enum is
+  `sage | oak | quartz | black | white`; the MVP also has walnut, espresso, natural,
+  navy, gray, sand and european. Only `oak` reaches a wood texture here.
+
+  If a dark wood is added it must take **`wood-light/color-calm.jpg`, not
+  `color.jpg`**. `color-calm` is the same grain pre-blended 55% toward a flat
+  mid-brown, and the MVP switched to it deliberately: the raw photo's per-pixel
+  variance gets amplified by sRGB→linear *and* the albedo lift into "a loud
+  high-frequency zebra/exotic-veneer stripe instead of quiet walnut grain"
+  (`cabinet-colors.ts:41-56`). Measured off the files we serve: HF energy 3.04 raw
+  against 1.52 calm, channel σ 16.6/10.8/6.7 against 6.4/5.2/4.6 — the MVP's own
+  "~2.5-3x" claim, independently confirmed. `color-calm.jpg` already ships in this
+  repo and is referenced nowhere; `materials.test.ts` guards that no finish reaches
+  the raw walnut photo.
+- **The wood albedo lift.** `applyWoodMaterial` sets `albedoColor` *above white* when
+  a wood texture carries the look — `Color3(1.05, 0.88, 0.68)` for the light oak,
+  `(1.36, 1.58, 1.86)` for the dark walnut. Those cannot be expressed as a hex, so
+  `materialColor` cannot currently produce them; `oak` renders without the lift and
+  reads darker and warmer than Babylon's. Needs `MeshStandardMaterial.color.setRGB`
+  in linear space, not a hex string. Not attempted — guessing a brightness constant
+  across two different PBR models is how you get a second wrong number.
+- **`environmentIntensity`.** The MVP lifts it per finish (1.4 painted, 2.3 dark
+  non-walnut, 1.15 dark walnut). three's nearest equivalent is `envMapIntensity`, and
+  the two are not 1:1 between Babylon PBR and three. Same reasoning as above: needs a
+  side-by-side render to calibrate, not arithmetic.
+- **Texture anisotropy is set but unasserted.** `materials.ts` now sets
+  `anisotropy = 16` on every texture (the MVP uses `maxAnisotropy` throughout).
+  It cannot be unit-tested here — `texture()` returns `null` without a DOM, so there
+  is no `Texture` object to read it off. It is verifiable only in a render.

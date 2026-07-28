@@ -55,6 +55,26 @@ const THICKNESS_TOLERANCE_M = 0.01 * INCH_TO_METER
 // Sub-millimetre slack absorbs the inch→metre conversion.
 const FRONT_PLANE_TOLERANCE_M = 0.0005
 
+/**
+ * Albedo tints for the two whole surfaces whose texture carries the look.
+ *
+ * Both renderers multiply map × colour, so a colour left at anything but a
+ * neutral value re-tints the photo. The MVP picks a neutral grey below 1 on
+ * purpose — "reduce albedo so shadows can darken" (`KitchenAssembly.tsx:2704`):
+ * floor `Color3(0.7, 0.7, 0.7)`, backsplash `Color3(0.85, 0.85, 0.85)`.
+ *
+ * Those are linear values. three multiplies in linear too, but takes
+ * `material.color` as sRGB and decodes it, so the hex here is the sRGB
+ * encoding of the MVP's linear number — `1.055 * c^(1/2.4) - 0.055`, giving
+ * 0.7 -> 0.854 -> #dadada and 0.85 -> 0.931 -> #ededed.
+ *
+ * Exact cross-renderer parity is not claimed: Babylon reaches these through
+ * `StandardMaterial`, which is not the same shading model as three's
+ * `MeshStandardMaterial`. What is claimed is the neutrality and the ratio.
+ */
+const FLOOR_ALBEDO_TINT = '#dadada'
+const BACKSPLASH_ALBEDO_TINT = '#ededed'
+
 /** How far a box reaches toward the room, in the node's own frame. */
 function frontReach(primitive: BoxPrimitive): number {
   return -(primitive.positionM[2] - primitive.dimensionsM[2] / 2)
@@ -379,7 +399,14 @@ export function buildMagicLayoutGeometry(node: MagicCabinetLayoutNode): Group {
       key: `floor:${node.floorType}`,
       style,
       plan: floorPlan,
-      color: FLOOR_TEXTURES[node.floorType].fallbackColor,
+      // NOT `fallbackColor`. `style.ts` defines that field as the flat colour
+      // used *when the jpg is unavailable*, and the MVP uses it in exactly one
+      // place: the texture's onError callback (`KitchenAssembly.tsx:2693`).
+      // When the texture does load, the MVP sets `diffuseColor` to a neutral
+      // `Color3(0.7, 0.7, 0.7)` — "reduce albedo so shadows can darken". Wiring
+      // the fallback in as a tint multiplied the oak floor photo by hardwood's
+      // mid-brown `#a67c52`.
+      color: FLOOR_ALBEDO_TINT,
       size: [node.width, node.depth],
       rotationRad: FLOOR_TEXTURES[node.floorType].rotationRad ?? 0,
     }),
@@ -400,6 +427,9 @@ export function buildMagicLayoutGeometry(node: MagicCabinetLayoutNode): Group {
         key: `backsplash:${node.backsplashMaterial}`,
         style,
         plan: backsplashPlan,
+        // Without this the key falls through `materialColor`'s token scan to
+        // its `#9b9b83` default and multiplies white metro tile by olive.
+        color: BACKSPLASH_ALBEDO_TINT,
         size: [node.width, height],
       }),
     )

@@ -25,19 +25,47 @@ function styleOf(node: MagicCabinetComponentNode): MagicStyleContext {
 // bare picking up wood grain.
 
 describe('finish → texture mapping', () => {
-  test('oak takes the full wood PBR set at the MVP normal strength', () => {
+  // These two used to assert the inverted mapping — `oak` onto `wood-light/`
+  // and `black` onto `wood-dark/` — which is the defect, not the contract. The
+  // directories are mislabeled at the asset level (`cabinet-colors.ts:31` says
+  // so in caps): `wood-light/` holds a dark walnut, `wood-dark/` holds a light
+  // oak. The MVP inverts its finish→directory map to compensate; we had
+  // inherited the label without the compensation.
+  test('oak takes the light-oak photo, which lives in the dark-labelled dir', () => {
     const plan = magicMaterialPlan('cabinet-panel:plywood', style('oak'))
-    expect(plan.map).toBe('/textures/finishes/wood-light/color.jpg')
-    expect(plan.normalMap).toBe('/textures/finishes/wood-light/normal.jpg')
-    expect(plan.roughnessMap).toBe('/textures/finishes/wood-light/roughness.jpg')
+    expect(plan.map).toBe('/textures/finishes/wood-dark/color.jpg')
+    expect(plan.normalMap).toBe('/textures/finishes/wood-dark/normal.jpg')
+    expect(plan.roughnessMap).toBe('/textures/finishes/wood-dark/roughness.jpg')
+    // `bump.level = isDarkWalnut ? 0.16 : 0.26`, and `isDarkWalnut` tests the
+    // directory `/wood-light/`. The oak photo takes the other branch.
     expect(plan.normalScale).toBe(0.26)
     expect(plan.roughness).toBe(0.42)
+    // `max(0.15, panel.width / 58)` where `isLightOak`, against 46"/0.2 for
+    // every other body surface.
+    expect(plan.uvReferenceM).toBeCloseTo(58 * 0.0254, 6)
+    expect(plan.uvMin).toBe(0.15)
   })
 
-  test('black takes the dark wood set, which is a weaker normal', () => {
+  test('black is a painted finish, not a wood one', () => {
+    // `cabinet-colors.ts` resolves black to `/textures/cabinets/painted.jpg`
+    // like every other paint. Mapping it to a wood directory put grain on a
+    // black cabinet.
     const plan = magicMaterialPlan('cabinet-panel:mdf', style('black'))
-    expect(plan.map).toBe('/textures/finishes/wood-dark/color.jpg')
-    expect(plan.normalScale).toBe(0.16)
+    expect(plan.map).toBe('/textures/cabinets/painted.jpg')
+    expect(plan.normalMap).toBe('/textures/finishes/paint-normal.jpg')
+    expect(plan.normalScale).toBe(0.2)
+  })
+
+  test('no finish reaches the dark-walnut photo, because none is ported', () => {
+    // `wood-light/` is the walnut, and the MVP only ever reaches it through
+    // `walnut`/`espresso` — neither of which exists in Pascal's finish enum.
+    // If one is added it must take `color-calm.jpg`, not `color.jpg`; see
+    // PORT.md. This is the guard that catches a future finish being wired to
+    // the raw photo the MVP deliberately stopped using.
+    for (const finish of ['sage', 'oak', 'quartz', 'black', 'white']) {
+      const plan = magicMaterialPlan('cabinet-panel:mdf', style(finish))
+      expect(plan.map ?? '').not.toContain('wood-light')
+    }
   })
 
   test('painted finishes take the paint albedo and the shared paint normal', () => {
