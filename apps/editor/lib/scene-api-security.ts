@@ -148,8 +148,18 @@ function configuredOrigins(): Set<string> {
 function isSameOrigin(request: Request, origin: string): boolean {
   const parsedOrigin = parseUrl(origin)
   if (!parsedOrigin) return false
-  const requestUrl = new URL(request.url)
-  return normalizeOrigin(parsedOrigin) === normalizeOrigin(requestUrl)
+  return normalizeOrigin(parsedOrigin) === publicRequestOrigin(request)
+}
+
+function publicRequestOrigin(request: Request): string {
+  const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0]?.trim()
+  const host = forwardedHost || request.headers.get('host')
+  const forwardedProto = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim()
+  if (host && forwardedProto) {
+    const forwardedUrl = parseUrl(`${forwardedProto}://${host}`)
+    if (forwardedUrl) return normalizeOrigin(forwardedUrl)
+  }
+  return normalizeOrigin(new URL(request.url))
 }
 
 function isLoopbackRequest(request: Request): boolean {

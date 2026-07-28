@@ -37,11 +37,13 @@ test('requires a token for non-loopback scene API requests', async () => {
 
 test('allows same-origin browser requests without exposing the API cross-origin', () => {
   delete process.env.PASCAL_SCENE_API_TOKEN
-  const request = new Request('https://editor.example/api/scenes', {
+  const request = new Request('http://127.0.0.1:3002/api/scenes', {
     method: 'PUT',
     headers: {
       host: 'editor.example',
       origin: 'https://editor.example',
+      'x-forwarded-host': 'editor.example',
+      'x-forwarded-proto': 'https',
     },
   })
 
