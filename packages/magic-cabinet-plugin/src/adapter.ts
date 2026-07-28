@@ -43,6 +43,87 @@ function rotationRad(
 }
 
 /**
+ * The corner an engine component's local frame rotates about, in room-world
+ * inches — which is NOT `transform.positionIn` for an appliance.
+ *
+ * The engine carries two anchor conventions, and reading one across put every
+ * appliance a full footprint into the room:
+ *
+ *   - A **cabinet** is corner-anchored in its own frame. `positionIn` is the
+ *     corner the yaw turns the `x ∈ [0, W], z ∈ [0, D]` footprint about, so an
+ *     east-wall cabinet at yaw 270 grows to -x, away from the wall it stands
+ *     on (`mvp .../lib/layout/countertops.ts:19 getCabinetBounds`).
+ *   - An **appliance** is anchored on the world axis-aligned MINIMUM corner,
+ *     and its extents swap on a quarter turn — the yaw orients the model
+ *     without being applied to the anchor offset
+ *     (`countertops.ts:43 getFridgeBounds`, and again in
+ *     `components/kitchen/appliance-render-plan.ts:80-82`).
+ *
+ * The MVP never has to reconcile them because it never draws the engine's
+ * appliance box: it drops a GLB at the centre that second rule gives. The
+ * mismatch is invisible upstream and only bites a renderer that places the
+ * component frame itself, like ours.
+ *
+ * So convert once, here, and let the rest of the adapter stay on one
+ * convention. Solving `getCabinetBounds(anchor) === getFridgeBounds(component)`
+ * for the anchor gives a per-corner shift that the `Math.min` form below
+ * expresses for any yaw (it is the AABB-minimum of the rotated footprint):
+ *
+ *     yaw       0      90        180             270
+ *     shift     none   z += W    x += W, z += D  x += D
+ *
+ * Checked against the solver's own output for the default kitchen — every one
+ * exact, in inches, against `getFridgeBounds`:
+ *
+ *     refrigerator  yaw 270  x[ 90.50, 120.50]  z[ 0.00,  36.00]
+ *     range         yaw 270  x[ 94.00, 120.50]  z[51.00,  81.00]
+ *     hood          yaw 270  x[100.50, 120.50]  z[51.00,  81.00]
+ *     sink          yaw 180  x[ 36.00,  66.00]  z[96.00, 118.00]
+ *
+ * `appliance-opening` is deliberately NOT included. It is a gap the cabinet run
+ * leaves rather than a placed appliance, and `KitchenAssembly.tsx:535` routes
+ * it through `getCabinetBounds` — the dishwasher lands in its 24in slot at
+ * x ∈ [12, 36] only under the cabinet rule.
+ */
+function componentAnchorIn(component: KitchenComponent): { x: number; y: number; z: number } {
+  const p = component.transform.positionIn
+  const shift = applianceAnchorShiftIn(
+    component.kind,
+    component.dimensionsIn,
+    component.transform.rotationDeg.y,
+  )
+  return { x: p.x + shift.x, y: p.y, z: p.z + shift.z }
+}
+
+/**
+ * The shift `componentAnchorIn` applies, in engine inches, exported so anything
+ * writing a node position back to the engine can undo it.
+ *
+ * `pinnedEdits` (`packages/mcp .../magic-kitchen-tools.ts`) hands a dragged or
+ * pinned node's world position straight back as `positionIn`. Without the
+ * inverse there, every `update_magic_kitchen` on an appliance walks it another
+ * footprint — the shift compounds on each round trip.
+ *
+ * Zero for every other kind, so callers do not have to branch.
+ */
+export function applianceAnchorShiftIn(
+  componentKind: string,
+  dimensionsIn: { x: number; z: number },
+  rotationYDeg: number,
+): { x: number; z: number } {
+  if (componentKind !== 'appliance') return { x: 0, z: 0 }
+  const theta = (rotationYDeg * Math.PI) / 180
+  const cos = Math.cos(theta)
+  const sin = Math.sin(theta)
+  const width = dimensionsIn.x
+  const depth = dimensionsIn.z
+  return {
+    x: -(Math.min(0, width * cos) + Math.min(0, depth * sin)),
+    z: -(Math.min(0, -width * sin) + Math.min(0, depth * cos)),
+  }
+}
+
+/**
  * Engine points that are already in room-world inches — `space: 'world'`
  * primitives and `planOutlineIn` — carry the component yaw baked in. The
  * Pascal node re-applies that yaw to its children (`<group rotation>` in 3D,
@@ -54,7 +135,7 @@ function worldToComponentLocal(
   point: { x: number; z: number },
   component: KitchenComponent,
 ): { x: number; z: number } {
-  const c = component.transform.positionIn
+  const c = componentAnchorIn(component)
   const theta = (component.transform.rotationDeg.y * Math.PI) / 180
   const dx = point.x - c.x
   const dz = point.z - c.z
@@ -69,12 +150,39 @@ function componentPosition(
   roomOrigin: [number, number, number],
   invertZ: boolean,
 ): [number, number, number] {
-  const p = component.transform.positionIn
+  const p = componentAnchorIn(component)
   return [
     roomOrigin[0] + meters(p.x),
     roomOrigin[1] + meters(p.y),
     roomOrigin[2] + meters(invertZ ? -p.z : p.z),
   ]
+}
+
+/**
+ * An appliance arrives as its whole envelope in one box sitting at the
+ * component-local origin (`packages/engine .../index.ts:404`) — but a box's
+ * transform is its CENTRE everywhere else in this contract, and the component
+ * frame is corner-anchored (`appliances.ts:180 nativeFrame` builds against
+ * `x ∈ [0, W]`, `y ∈ [0, H]`). Taken literally, a 66in refrigerator renders
+ * `y ∈ [-33, +33]`: half of it below the floor, and half a footprint out of
+ * the wall it is supposed to stand against.
+ *
+ * `applianceDetail` is on by default, and the native builders replace this box
+ * rather than covering it, so the defect only shows with detail off. Re-seat
+ * the envelope on the centre of the corner-anchored frame so both paths agree.
+ *
+ * Narrow on purpose: it fires only for the exact shape observed — an appliance
+ * envelope, in component-local space, at the origin. Any other primitive is
+ * left alone, so an engine that starts emitting appliance sub-geometry (or
+ * seats this box correctly itself) is not silently re-offset.
+ */
+function isApplianceEnvelopeAtOrigin(primitive: BoxGeometry, component: KitchenComponent): boolean {
+  if (component.kind !== 'appliance' || primitive.space !== 'component-local') return false
+  const p = primitive.transform.positionIn
+  if (p.x !== 0 || p.y !== 0 || p.z !== 0) return false
+  const d = primitive.dimensionsIn
+  const e = component.dimensionsIn
+  return d.x === e.x && d.y === e.y && d.z === e.z
 }
 
 function primitiveLocalPosition(
@@ -83,9 +191,16 @@ function primitiveLocalPosition(
   invertZ: boolean,
 ): [number, number, number] {
   const p = primitive.transform.positionIn
-  const c = component.transform.positionIn
+  const c = componentAnchorIn(component)
   const local = primitive.space === 'world' ? worldToComponentLocal(p, component) : p
   const y = primitive.space === 'world' ? p.y - c.y : p.y
+  if (primitive.kind === 'box' && isApplianceEnvelopeAtOrigin(primitive, component)) {
+    return [
+      meters(component.dimensionsIn.x / 2),
+      meters(component.dimensionsIn.y / 2),
+      meters((invertZ ? -1 : 1) * (component.dimensionsIn.z / 2)),
+    ]
+  }
   return [meters(local.x), meters(y), meters(invertZ ? -local.z : local.z)]
 }
 
@@ -115,7 +230,7 @@ function adaptPolygon(
   component: KitchenComponent,
   invertZ: boolean,
 ): MagicGeometryPrimitive {
-  const c = component.transform.positionIn
+  const c = componentAnchorIn(component)
   const localPoint = (point: { x: number; z: number }): [number, number] => {
     const local = worldToComponentLocal(point, component)
     return [meters(local.x), meters(invertZ ? -local.z : local.z)]

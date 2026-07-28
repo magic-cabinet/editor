@@ -113,18 +113,55 @@ describe('native appliance frame', () => {
   test('the appliance faces the room, not the wall', () => {
     // A z-flip is the failure this whole wrapper exists to prevent, and it is
     // invisible in a bounding box alone — the box is nearly symmetric. The
-    // asymmetry that betrays it is the door furniture: a fridge handle stands
-    // proud of the FRONT face and nothing stands proud of the back. In the
-    // engine frame the room is toward -z, so the overhang must be on -z.
+    // asymmetry that betrays it is the door furniture: the handle stands proud
+    // of the door and nothing stands proud of the back panel. In the engine
+    // frame the room is toward -z, so the handle must be at the -z end.
+    //
+    // Asserted against the BODY rather than the engine envelope on purpose.
+    // The envelope-relative form of this check silently encoded the builders'
+    // front-flush seating, so it failed the moment `seatAgainstEnvelopeBack`
+    // pushed the appliance onto the wall — a seating change is not a flip, and
+    // the guard has to tell them apart.
     const node = component({ subtype: 'refrigerator', dimensions: [0.914, 1.8, 0.66] })
-    const box = bounds(node)
-    const depth = node.dimensions[2]
-    const frontOverhang = -depth - box.min.z
-    const backOverhang = box.max.z
-    expect(frontOverhang).toBeGreaterThan(0.01)
-    expect(backOverhang).toBeLessThan(0.005)
-    // Flipped, these two swap — so assert the gap, not just the signs.
-    expect(frontOverhang).toBeGreaterThan(backOverhang + 0.01)
+    const group = new Group()
+    expect(addNativeAppliances(group, node, STYLE)).toBe(true)
+    group.updateMatrixWorld(true)
+    const body = new Box3().setFromObject(group)
+
+    const handles: Box3[] = []
+    group.traverse((object) => {
+      if ((object as { isMesh?: boolean }).isMesh && /door-.*-handle$/.test(object.name)) {
+        handles.push(new Box3().setFromObject(object))
+      }
+    })
+    expect(
+      handles.length,
+      'no door handle mesh — the flip guard cannot see anything',
+    ).toBeGreaterThan(0)
+
+    for (const handle of handles) {
+      // The handle is the frontmost thing on the appliance, hard against the
+      // -z end of the body and nowhere near the +z end.
+      const fromFront = handle.min.z - body.min.z
+      const fromBack = body.max.z - handle.max.z
+      expect(fromFront).toBeLessThan(0.01)
+      expect(fromBack).toBeGreaterThan(body.max.z - body.min.z - 0.1)
+    }
+  })
+
+  test('the appliance stands against the wall, not floating off it', () => {
+    // The complaint this fixes: Pascal's builders seat their shell on the FRONT
+    // plane and drop every clearance out the back, so a free-standing appliance
+    // hung 5.14in (refrigerator) and 2.82in (range) off the wall behind it.
+    // The engine's envelope runs z ∈ [-depth, 0] with the wall at z = 0.
+    for (const [subtype, dimensions] of [
+      ['refrigerator', [0.914, 1.8, 0.66]],
+      ['range', [0.76, 0.92, 0.66]],
+      ['hood', [0.76, 0.5, 0.5]],
+    ] as const) {
+      const box = bounds(component({ subtype, dimensions: [...dimensions] }))
+      expect(box.max.z, `${subtype} is not touching the wall`).toBeCloseTo(0, 4)
+    }
   })
 
   test('every mapped appliance builds real geometry, not an empty group', () => {

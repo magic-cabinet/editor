@@ -9,7 +9,12 @@ import {
 import { getMaterialPresetByRef } from '@pascal-app/core'
 import { adaptKitchenResult } from './adapter'
 import { createMagicKitchenPilotScene } from './house'
-import { createMagicKitchenHouseShell } from './house-shell'
+import {
+  createMagicKitchenHouseShell,
+  MAGIC_HOUSE_WALL_THICKNESS,
+  MAGIC_KITCHEN_NORTH_WALL_Z,
+  MAGIC_KITCHEN_SIDE_WALL_X,
+} from './house-shell'
 import { magicCabinetPlugin } from './index'
 import { getMagicPilotPresentation, MAGIC_PILOT_PRESENTATIONS } from './presentation'
 import type { MagicCabinetComponentNode } from './schema'
@@ -216,9 +221,18 @@ describe('Magic Kitchen House pilot', () => {
   })
 
   /**
-   * The kitchen zone is `x -6…-0.8, z -4.5…-0.7` (`house-shell.ts`). A one-wall
-   * run only had to meet one wall and could centre its width; an L has to meet
-   * two, so `roomOrigin` is derived rather than nudged and this pins the result.
+   * A one-wall run only had to meet one wall and could centre its width; an L
+   * has to meet two, so `roomOrigin` is derived rather than nudged and this
+   * pins the result.
+   *
+   * **Against the wall FACES, not the centrelines.** This test used to read the
+   * zone as `x -6…-0.8, z -4.5…-0.7` — the `start`/`end` pairs straight out of
+   * `house-shell.ts`. Those are centrelines: Pascal seats a wall's two faces at
+   * ±thickness/2 (`core .../systems/wall/wall-footprint.ts:18-66`), so asserting
+   * the kitchen reached them was asserting it reached half a wall INSIDE the
+   * plaster, and the test passed while every cabinet was buried 2.36in. It
+   * pinned the defect. The faces are derived here for the same reason
+   * `house.ts` derives the origin — so a thickness edit moves both together.
    *
    * Measured from the rendered primitives — component position, component yaw,
    * then the primitive's own local transform. An axis-aligned read of
@@ -227,7 +241,13 @@ describe('Magic Kitchen House pilot', () => {
    * actually flush against.
    */
   test('seats the L flush into the kitchen zone north-east corner', () => {
-    const zone = { minX: -6.0, maxX: -0.8, minZ: -4.5, maxZ: -0.7 }
+    const halfWall = MAGIC_HOUSE_WALL_THICKNESS / 2
+    const zone = {
+      minX: -6.0,
+      maxX: MAGIC_KITCHEN_SIDE_WALL_X - halfWall,
+      minZ: MAGIC_KITCHEN_NORTH_WALL_Z + halfWall,
+      maxZ: -0.7,
+    }
     const box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity }
 
     for (const node of Object.values(createMagicKitchenPilotScene().nodes)) {
@@ -268,16 +288,28 @@ describe('Magic Kitchen House pilot', () => {
 
     expect(Number.isFinite(box.minX)).toBe(true)
 
+    /**
+     * The engine itself lets an appliance sit half an inch proud of the room
+     * rectangle, and the MVP draws it exactly there — `getFridgeBounds`
+     * (`mvp .../lib/layout/countertops.ts:42`) returns `x[90.50, 120.50]` for
+     * the refrigerator in a room whose `widthIn` is 120. The range and hood
+     * are the same 120.50. So this 0.5in is upstream behaviour we are
+     * reproducing faithfully, not slop in the seating — tolerated here rather
+     * than papered over with a loose `toBeCloseTo`.
+     */
+    const ENGINE_APPLIANCE_PROUD = 0.5 * 0.0254
+
     // Nothing crosses a wall of the room it lives in.
     expect(box.minX).toBeGreaterThanOrEqual(zone.minX)
-    expect(box.maxX).toBeLessThanOrEqual(zone.maxX + 1e-9)
-    expect(box.minZ).toBeGreaterThanOrEqual(zone.minZ - 1e-9)
+    expect(box.maxX).toBeLessThanOrEqual(zone.maxX + ENGINE_APPLIANCE_PROUD + 1e-9)
+    expect(box.minZ).toBeGreaterThanOrEqual(zone.minZ - ENGINE_APPLIANCE_PROUD - 1e-9)
     expect(box.maxZ).toBeLessThanOrEqual(zone.maxZ)
 
     // And both runs actually reach their wall — an origin that merely fits
     // inside the zone passes the four bounds above but fails these two.
-    expect(box.maxX).toBeCloseTo(zone.maxX, 3)
-    expect(box.minZ).toBeCloseTo(zone.minZ, 3)
+    // Half a wall out (the old centreline seating) is 2.36in and fails both.
+    expect(box.maxX).toBeGreaterThan(zone.maxX - 0.001)
+    expect(box.minZ).toBeLessThan(zone.minZ + 0.001)
   })
 
   /**

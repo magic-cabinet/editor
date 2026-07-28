@@ -3,7 +3,15 @@ import type { AnyNode } from '@pascal-app/core'
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
 import { adaptKitchenResult } from './adapter'
 import { MAGIC_CABINET_PLUGIN_ID } from './constants'
-import { createMagicKitchenHouseShell, MAGIC_PILOT_LEVEL_ID } from './house-shell'
+import {
+  createMagicKitchenHouseShell,
+  MAGIC_HOUSE_WALL_THICKNESS,
+  MAGIC_KITCHEN_NORTH_WALL_Z,
+  MAGIC_KITCHEN_SIDE_WALL_X,
+  MAGIC_PILOT_LEVEL_ID,
+} from './house-shell'
+
+const meters = (inches: number): number => inches * 0.0254
 
 /**
  * The kitchen the Babylon MVP paints on mount — not the engine's `PILOT_KITCHEN_INPUT`
@@ -51,12 +59,34 @@ export const MAGIC_KITCHEN_DEFAULT_INPUT: GenerateKitchenInput = Object.freeze({
  * (max z) and east wall (max x) land at `roomOrigin.z − depth` and `roomOrigin.x + width`.
  *
  * The one-wall pilot exploited this to pin its back run to the north exterior wall
- * (`−0.7 − 3.800 = −4.5`) and simply centred its width. An L-shape needs a real corner
- * instead, so both runs are anchored: the north run onto `wall_magic_north` (z = −4.5)
- * and the east run onto `wall_magic_kitchen_side` (x = −0.8), seating the L into the
- * corner those two walls form. 120" = 3.048 m, hence −4.5 + 3.048 and −0.8 − 3.048.
+ * and simply centred its width. An L-shape needs a real corner instead, so both runs
+ * are anchored: the north run onto `wall_magic_north` and the east run onto
+ * `wall_magic_kitchen_side`, seating the L into the corner those two walls form.
+ *
+ * **Onto the wall's FACE, not its centreline.** The engine's room rectangle is the
+ * finished wall surface, which the MVP says in its own geometry: the backsplash is
+ * drawn at `(kOffZ + room.depth) − BS_OFFSET` with `BS_OFFSET = 0.01` commented as
+ * "tiny offset from wall to avoid z-fighting" (`mvp .../KitchenAssembly.tsx:932,1092`).
+ * A Pascal wall is centred on its `start`/`end`, so its faces sit at ±thickness/2
+ * (`core .../systems/wall/wall-footprint.ts:18-66`). Laying the room rectangle onto the
+ * centreline therefore buries the whole kitchen half a wall deep — measured at 2.36in
+ * for every cabinet and the countertop, which reads as "nothing sticks to the wall"
+ * even once the appliance anchors are right.
+ *
+ * Derived rather than written out, because the failure mode is silent: a wall-thickness
+ * edit would re-bury the kitchen with nothing to catch it. Guarded by "seats the L flush
+ * into the kitchen zone north-east corner" in `pilot.test.ts`, which reads the same two
+ * face planes off `house-shell.ts` — that test previously asserted the centrelines and
+ * so passed while the kitchen was buried.
  */
-const MAGIC_KITCHEN_ROOM_ORIGIN: [number, number, number] = [-3.848, 0.05, -1.452]
+const KITCHEN_HALF_WALL = MAGIC_HOUSE_WALL_THICKNESS / 2
+const MAGIC_KITCHEN_ROOM_ORIGIN: [number, number, number] = [
+  // Kitchen-facing face of `wall_magic_kitchen_side`, back off the run's width.
+  MAGIC_KITCHEN_SIDE_WALL_X - KITCHEN_HALF_WALL - meters(MAGIC_KITCHEN_DEFAULT_INPUT.room.widthIn),
+  0.05,
+  // Kitchen-facing face of `wall_magic_north`, back off the run's depth (z inverts).
+  MAGIC_KITCHEN_NORTH_WALL_Z + KITCHEN_HALF_WALL + meters(MAGIC_KITCHEN_DEFAULT_INPUT.room.depthIn),
+]
 
 export function createMagicKitchenPilotScene(): SceneGraph {
   const scene = createMagicKitchenHouseShell()

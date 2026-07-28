@@ -13,7 +13,7 @@ import {
   sinkBowls,
 } from '@pascal-app/nodes/cabinet-geometry'
 
-import { Group, type Material } from 'three'
+import { Box3, Group, type Material } from 'three'
 import { type MagicStyleContext, magicMaterial } from './materials'
 import type { SlotPainter } from './painter'
 import type { MagicCabinetComponentNode } from './schema'
@@ -184,6 +184,46 @@ function nativeFrame(node: MagicCabinetComponentNode): Group {
   frame.position.set(width / 2, 0, -depth / 2)
   frame.rotation.y = Math.PI
   return frame
+}
+
+/**
+ * Push what the builders produced back until it touches the wall.
+ *
+ * Pascal's compartment builders anchor their shell to the FRONT plane and let
+ * every clearance fall out the back — the refrigerator's shell is capped at
+ * `min(node.depth * 0.78, openingDepth - 0.085)` and then seated by
+ * `shellCenterZ = shellFrontZ - shellDepth / 2`
+ * (`packages/nodes/src/cabinet/geometry/fridge.ts:938-939`). That is right for an
+ * appliance sitting *inside* a carcass: the carcass fills the engine's box, the
+ * shell floats within it, and the slack behind is a service gap nobody sees.
+ *
+ * Here the appliance IS the box, so nothing fills that slack and all of it shows
+ * up as air between the appliance and the wall it is meant to stand against.
+ * Measured on the default kitchen (`bun zz` harness, engine inches, envelope
+ * z ∈ [-depth, 0] with the wall at z = 0):
+ *
+ *     refrigerator  envelope [-30.00, 0]   built [-32.72, -5.14]   5.14in off the wall
+ *     range         envelope [-26.50, 0]   built [-28.88, -2.82]   2.82in
+ *     sink          envelope [-22.00, 0]   built [-19.28, -0.28]   0.28in
+ *     hood          envelope [-20.00, 0]   built [-19.69,  0.00]   flush already
+ *
+ * A free-standing appliance touches the wall and lets its door furniture stand
+ * proud into the room, so seat the built body's REAR on the envelope's rear and
+ * let the front fall where the builder put it. Centring on the envelope instead
+ * would leave 1.21in behind the refrigerator, and front-flushing is what we
+ * already have.
+ *
+ * Depth only. Width already centres itself, and height is deliberately untouched
+ * because an appliance stands on the floor rather than floating toward the
+ * ceiling. Guarded by `appliances.test.ts` — including a mutation that seats it
+ * the wrong way round.
+ */
+function seatAgainstEnvelopeBack(frame: Group): void {
+  frame.updateMatrixWorld(true)
+  const built = new Box3().setFromObject(frame)
+  if (built.isEmpty()) return
+  // The component-local envelope runs z ∈ [-depth, 0], so the wall plane is z = 0.
+  frame.position.z -= built.max.z
 }
 
 const SLOT_MATERIAL_KEYS: Record<CabinetSlotId, string> = {
@@ -363,6 +403,7 @@ export function addNativeAppliances(
     }
   })
 
+  seatAgainstEnvelopeBack(frame)
   group.add(frame)
   return true
 }

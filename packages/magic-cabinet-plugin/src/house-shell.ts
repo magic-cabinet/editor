@@ -19,6 +19,27 @@ export const MAGIC_PILOT_LEVEL_ID = 'level_magic_ground'
 
 type Point = [number, number]
 
+/**
+ * Every partition in the shell, in metres.
+ *
+ * Exported because a wall's `start`/`end` is its CENTRELINE — Pascal seats the two
+ * faces at ±thickness/2 (`core .../systems/wall/wall-footprint.ts:18-66`) — so anything
+ * that has to sit flush against a wall has to know the half-thickness to get there.
+ * `house.ts` derives the kitchen's room origin from it rather than re-typing the
+ * arithmetic, which is how the kitchen ended up buried half a wall deep.
+ */
+export const MAGIC_HOUSE_WALL_THICKNESS = 0.12
+
+/**
+ * The two walls the kitchen's L is seated into, as centrelines.
+ *
+ * `wall_magic_kitchen_side` runs along x here, `wall_magic_north` along z; the kitchen
+ * is on the −x side of the first and the +z side of the second, so its faces are
+ * inboard of both by half a thickness.
+ */
+export const MAGIC_KITCHEN_SIDE_WALL_X = -0.8
+export const MAGIC_KITCHEN_NORTH_WALL_Z = -4.5
+
 function wall(
   id: string,
   name: string,
@@ -31,7 +52,7 @@ function wall(
     name,
     parentId: MAGIC_PILOT_LEVEL_ID,
     children,
-    thickness: 0.12,
+    thickness: MAGIC_HOUSE_WALL_THICKNESS,
     height: 2.7,
     start,
     end,
@@ -95,8 +116,8 @@ export function createMagicKitchenHouseShell(): SceneGraph {
     wall(
       'wall_magic_north',
       'North exterior',
-      [-6, -4.5],
-      [6, -4.5],
+      [-6, MAGIC_KITCHEN_NORTH_WALL_Z],
+      [6, MAGIC_KITCHEN_NORTH_WALL_Z],
       ['window_magic_kitchen', 'window_magic_living'],
     ),
     wall('wall_magic_east', 'East exterior', [6, -4.5], [6, 4.5], ['window_magic_bedroom_east']),
@@ -111,7 +132,12 @@ export function createMagicKitchenHouseShell(): SceneGraph {
     // Kitchen threshold: two wing walls leave a generous 1.6 m opening.
     wall('wall_magic_kitchen_left', 'Kitchen threshold left', [-6, -0.7], [-4, -0.7]),
     wall('wall_magic_kitchen_right', 'Kitchen threshold right', [-2.4, -0.7], [-0.8, -0.7]),
-    wall('wall_magic_kitchen_side', 'Kitchen living separation', [-0.8, -4.5], [-0.8, 0.5]),
+    wall(
+      'wall_magic_kitchen_side',
+      'Kitchen living separation',
+      [MAGIC_KITCHEN_SIDE_WALL_X, MAGIC_KITCHEN_NORTH_WALL_Z],
+      [MAGIC_KITCHEN_SIDE_WALL_X, 0.5],
+    ),
     wall(
       'wall_magic_rear_partition',
       'Bedroom separation',

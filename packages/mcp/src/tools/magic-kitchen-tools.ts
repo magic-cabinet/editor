@@ -8,6 +8,7 @@ import {
 } from '@magic-cabinet/engine'
 import {
   adaptKitchenResult,
+  applianceAnchorShiftIn,
   createMagicKitchenPilotScene,
   getMagicPilotPresentation,
   MagicCabinetComponentNode,
@@ -145,13 +146,27 @@ function pinnedEdits(
   const pinned = new Set(pinnedIds)
   for (const component of components) {
     if (!pinned.has(component.engineComponentId)) continue
+    const rotationYDeg = -(component.rotation[1] * 180) / Math.PI
+    // A node's position is the corner its frame rotates about. For an appliance
+    // the adapter shifted that off `transform.positionIn`, because the engine
+    // anchors appliances on the world AABB minimum instead — so writing the node
+    // position straight back would re-apply the shift and walk the appliance
+    // another footprint on every edit.
+    const shift = applianceAnchorShiftIn(
+      component.componentKind,
+      {
+        x: component.dimensions[0] * metersToInches,
+        z: component.dimensions[2] * metersToInches,
+      },
+      rotationYDeg,
+    )
     edits[component.engineComponentId] = {
       positionIn: {
-        x: (component.position[0] - layout.position[0]) * metersToInches,
+        x: (component.position[0] - layout.position[0]) * metersToInches - shift.x,
         y: (component.position[1] - layout.position[1]) * metersToInches,
-        z: -(component.position[2] - layout.position[2]) * metersToInches,
+        z: -(component.position[2] - layout.position[2]) * metersToInches - shift.z,
       },
-      rotationYDeg: -(component.rotation[1] * 180) / Math.PI,
+      rotationYDeg,
       wall: component.wall === 'angled' ? null : component.wall,
     }
   }
