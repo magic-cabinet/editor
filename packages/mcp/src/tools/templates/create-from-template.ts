@@ -13,7 +13,7 @@ export const createFromTemplateInput = {
   id: z
     .string()
     .describe(
-      'Template id (see `list_templates`). Currently one of: "empty-studio", "two-bedroom", "garden-house".',
+      'Template id (see `list_templates`), including "magic-kitchen-house" for the roofless Magic Cabinet showroom shell.',
     ),
   name: z
     .string()

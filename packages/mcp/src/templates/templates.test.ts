@@ -74,6 +74,17 @@ describe('scene templates', () => {
     expect(byType.fence ?? 0).toBeGreaterThanOrEqual(3)
     expect(byType.wall ?? 0).toBeGreaterThanOrEqual(4)
   })
+
+  test('magic-kitchen-house has roofless showroom rooms and native openings', () => {
+    const { nodes } = TEMPLATES['magic-kitchen-house'].template
+    const byType = groupByType(nodes)
+    expect(byType.wall ?? 0).toBe(12)
+    expect(byType.zone ?? 0).toBe(7)
+    expect(byType.door ?? 0).toBe(4)
+    expect(byType.window ?? 0).toBe(5)
+    expect(byType.roof ?? 0).toBe(0)
+    expect(byType.column ?? 0).toBe(0)
+  })
 })
 
 function groupByType(nodes: Record<string, { type: string }>): Record<string, number> {

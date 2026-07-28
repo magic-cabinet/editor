@@ -1,3 +1,4 @@
+import { magicCabinetHostPanel, magicCabinetPlugin } from '@magic-cabinet/pascal-plugin'
 import {
   type AnyNodeDefinition,
   discoverPlugins,
@@ -9,6 +10,7 @@ import {
 import { registerEditorHostPanel } from '@pascal-app/editor'
 import { builtinPlugin } from '@pascal-app/nodes'
 import { treesHostPanel, treesPlugin } from '@pascal-app/plugin-trees'
+import { shouldLoadTreesPlugin } from './product-profile'
 
 // Idempotency guards: HMR can reload this module, but `registerNode`
 // throws on duplicate kinds. Flags live in the module closure so they
@@ -83,8 +85,12 @@ export async function loadExternalPlugins(): Promise<void> {
 // Register the first-party example node plugin alongside any host-provided
 // discovery source instead of replacing it. Its Nature rail panel is host UI,
 // so it is registered separately from the core plugin manifest.
-extendPluginDiscovery(async () => [treesPlugin])
-registerEditorHostPanel(treesHostPanel)
+void loadPlugin(magicCabinetPlugin)
+registerEditorHostPanel(magicCabinetHostPanel)
+if (shouldLoadTreesPlugin()) {
+  extendPluginDiscovery(async () => [treesPlugin])
+  registerEditorHostPanel(treesHostPanel)
+}
 
 loadBuiltinsSync()
 void loadExternalPlugins()

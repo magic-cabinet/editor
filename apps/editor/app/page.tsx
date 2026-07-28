@@ -1,14 +1,17 @@
 'use client'
 
+import { createMagicKitchenPilotScene } from '@magic-cabinet/pascal-plugin'
 import { Editor, ItemsPanel } from '@pascal-app/editor'
 import { Hammer, Layers, Package, Settings } from 'lucide-react'
 import Image from 'next/image'
 import Link from 'next/link'
 import { BuildTab } from '@/components/build-tab'
+import { MagicShowroomControls } from '@/components/magic-showroom-controls'
 import {
   CommunityViewerToolbarLeft,
   CommunityViewerToolbarRight,
 } from '@/components/viewer-toolbar'
+import { isMagicCabinetProfile, isSidebarTabVisible } from '@/lib/product-profile'
 
 // The open-source editor only ships the built-in catalog (no uploaded items),
 // so the Library/Community/Mine source chips and tag filters add nothing —
@@ -82,9 +85,11 @@ const SIDEBAR_TABS = [
       />
     ),
   },
-]
+].filter((tab) => isSidebarTabVisible(tab.id))
 
 const PROJECT_ID = 'local-editor'
+const loadInitialScene = async () =>
+  isMagicCabinetProfile ? (createMagicKitchenPilotScene() as never) : null
 
 export default function Home() {
   return (
@@ -107,9 +112,15 @@ export default function Home() {
       )}
       <Editor
         layoutVersion="v2"
+        onLoad={loadInitialScene}
         projectId={PROJECT_ID}
         sidebarTabs={SIDEBAR_TABS}
-        viewerToolbarLeft={<CommunityViewerToolbarLeft />}
+        viewerToolbarLeft={
+          <div className="flex items-center gap-2">
+            <CommunityViewerToolbarLeft />
+            {isMagicCabinetProfile ? <MagicShowroomControls /> : null}
+          </div>
+        }
         viewerToolbarRight={<CommunityViewerToolbarRight />}
       />
     </div>

@@ -20,6 +20,7 @@ export const env = createEnv({
    */
   client: {
     NEXT_PUBLIC_ASSETS_CDN_URL: z.string().optional(),
+    NEXT_PUBLIC_PASCAL_PRODUCT_PROFILE: z.enum(['magic-cabinet', 'pascal']).optional(),
   },
 
   /**
@@ -28,6 +29,7 @@ export const env = createEnv({
   runtimeEnv: {
     NEXT_PUBLIC_ASSETS_CDN_URL:
       process.env.NEXT_PUBLIC_ASSETS_CDN_URL ?? process.env.NEXT_PUBLIC_EDITOR_ASSETS_CDN_URL,
+    NEXT_PUBLIC_PASCAL_PRODUCT_PROFILE: process.env.NEXT_PUBLIC_PASCAL_PRODUCT_PROFILE,
   },
 
   /**

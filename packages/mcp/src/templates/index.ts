@@ -1,6 +1,7 @@
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
 import * as emptyStudio from './empty-studio'
 import * as gardenHouse from './garden-house'
+import * as magicKitchenHouse from './magic-kitchen-house'
 import * as twoBedroom from './two-bedroom'
 
 export type TemplateMetadata = {
@@ -31,6 +32,7 @@ export const TEMPLATES = {
   'empty-studio': makeEntry(emptyStudio.template, emptyStudio.metadata),
   'two-bedroom': makeEntry(twoBedroom.template, twoBedroom.metadata),
   'garden-house': makeEntry(gardenHouse.template, gardenHouse.metadata),
+  'magic-kitchen-house': makeEntry(magicKitchenHouse.template, magicKitchenHouse.metadata),
 } as const
 
 export type TemplateId = keyof typeof TEMPLATES

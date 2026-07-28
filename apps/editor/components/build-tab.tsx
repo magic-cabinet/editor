@@ -19,6 +19,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/toolbar-tooltip'
+import { isBuildPaletteEntryVisible } from '@/lib/product-profile'
 import { cn } from '@/lib/utils'
 
 /**
@@ -78,7 +79,9 @@ const BASE_BUILD_TYPES: BuildType[] = [
 
 function collectBuildTypes(floorplanMode: FloorplanMode): BuildType[] {
   const baseKinds = new Set(BASE_BUILD_TYPES.flatMap((type) => (type.kind ? [type.kind] : [])))
-  const tools = BASE_BUILD_TYPES.filter((type) => type.kind).map((type, index) => ({
+  const tools = BASE_BUILD_TYPES.filter(
+    (type) => type.kind && isBuildPaletteEntryVisible(type.id),
+  ).map((type, index) => ({
     ...type,
     paletteOrder:
       nodeRegistry.get(type.kind!)?.presentation?.paletteOrder ?? type.paletteOrder ?? index * 10,
@@ -88,6 +91,7 @@ function collectBuildTypes(floorplanMode: FloorplanMode): BuildType[] {
     const extension = getFloorplanNodeExtension(definition)
     if (
       baseKinds.has(kind) ||
+      !isBuildPaletteEntryVisible(kind) ||
       !extension?.tool ||
       !isFloorplanToolAvailableInMode(extension.availableModes, floorplanMode) ||
       !presentation ||
@@ -105,7 +109,10 @@ function collectBuildTypes(floorplanMode: FloorplanMode): BuildType[] {
     })
   }
   tools.sort((left, right) => (left.paletteOrder ?? 0) - (right.paletteOrder ?? 0))
-  return [...tools, ...BASE_BUILD_TYPES.filter((type) => !type.kind)]
+  return [
+    ...tools,
+    ...BASE_BUILD_TYPES.filter((type) => !type.kind && isBuildPaletteEntryVisible(type.id)),
+  ]
 }
 
 // MEP sub-grid surfaced under the "MEP" tile — same icons + ordering the MEP
@@ -226,6 +233,7 @@ export function BuildTab() {
     const features: RoofFeature[] = []
     for (const [kind, def] of nodeRegistry.entries()) {
       if (def.capabilities.roofAccessory === undefined) continue
+      if (!isBuildPaletteEntryVisible(kind)) continue
       // Door / window declare `roofAccessory` for the wall-face cut but
       // already have their own Build tiles — listing them here too
       // would duplicate the entry under Roof → Features.

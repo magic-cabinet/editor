@@ -24,7 +24,7 @@ describe('list_templates', () => {
     await Promise.all([server.connect(srvT), client.connect(cliT)])
   })
 
-  test('enumerates all three seed templates', async () => {
+  test('enumerates all seed templates', async () => {
     const result = await client.callTool({ name: 'list_templates', arguments: {} })
     expect(result.isError).toBeFalsy()
     const parsed = parseToolText(result.content as StoredTextContent[])
@@ -35,7 +35,7 @@ describe('list_templates', () => {
       nodeCount: number
     }>
     const ids = list.map((t) => t.id).sort()
-    expect(ids).toEqual(['empty-studio', 'garden-house', 'two-bedroom'])
+    expect(ids).toEqual(['empty-studio', 'garden-house', 'magic-kitchen-house', 'two-bedroom'])
     for (const t of list) {
       expect(typeof t.name).toBe('string')
       expect(t.name.length).toBeGreaterThan(0)
@@ -48,7 +48,7 @@ describe('list_templates', () => {
     const result = await client.callTool({ name: 'list_templates', arguments: {} })
     expect(result.structuredContent).toBeDefined()
     const structured = result.structuredContent as { templates: Array<{ id: string }> }
-    expect(structured.templates.length).toBe(3)
+    expect(structured.templates.length).toBe(4)
   })
 })
 
