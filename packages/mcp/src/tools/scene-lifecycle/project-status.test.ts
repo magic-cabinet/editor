@@ -37,6 +37,8 @@ describe('project lifecycle tools', () => {
     expect(typeof parsed.projectId).toBe('string')
     expect(parsed.editorUrl).toBe(`/scene/${parsed.projectId}`)
     expect(parsed.nodeCount).toBe(0)
+    expect(parsed.defaultSceneId).toBeNull()
+    expect(parsed.sceneCount).toBe(0)
     expect(parsed.nextStep).toContain('save_scene')
   })
 
@@ -51,5 +53,31 @@ describe('project lifecycle tools', () => {
     expect(parsed.projectId).toBe(project.projectId)
     expect(parsed.editorUrl).toBe(`/scene/${project.projectId}`)
     expect(parsed.nodeCount).toBe(0)
+  })
+
+  test('reports the default scene and count for a multi-scene project', async () => {
+    await store.createProject({ id: 'party-project', name: 'Party project' })
+    await store.save({
+      id: 'party-project',
+      name: 'Main scene',
+      projectId: 'party-project',
+      graph: { nodes: {}, rootNodeIds: [] },
+    })
+    await store.save({
+      id: 'party-option',
+      name: 'Option',
+      projectId: 'party-project',
+      graph: { nodes: {}, rootNodeIds: [] },
+    })
+
+    const result = await client.callTool({
+      name: 'get_project_status',
+      arguments: { id: 'party-project' },
+    })
+    expect(result.isError).toBeFalsy()
+    const parsed = parseToolText(result.content as StoredTextContent[])
+    expect(parsed.defaultSceneId).toBe('party-project')
+    expect(parsed.sceneCount).toBe(2)
+    expect(parsed.editorUrl).toBe('/scene/party-project')
   })
 })

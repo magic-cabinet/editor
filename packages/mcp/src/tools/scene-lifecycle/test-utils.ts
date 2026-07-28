@@ -53,6 +53,7 @@ export class InMemorySceneStore implements SceneStore {
       workspaceId: string | null
       isPrivate: boolean
       thumbnailUrl: string | null
+      defaultSceneId: string | null
       createdAt: string
       updatedAt: string
     }
@@ -70,6 +71,7 @@ export class InMemorySceneStore implements SceneStore {
       workspaceId: opts.workspaceId ?? null,
       isPrivate: opts.isPrivate ?? true,
       thumbnailUrl: null,
+      defaultSceneId: null,
       createdAt: now,
       updatedAt: now,
     })
@@ -77,8 +79,10 @@ export class InMemorySceneStore implements SceneStore {
   }
 
   async getProjectStatus(id: string): Promise<ProjectStatus | null> {
-    if (!(this.projects.has(id) || this.data.has(id))) return null
-    return this.toProjectStatus(id)
+    if (this.projects.has(id)) return this.toProjectStatus(id)
+    const scene = this.data.get(id)
+    if (!scene?.projectId) return null
+    return this.toProjectStatus(scene.projectId)
   }
 
   async save(opts: SceneSaveOptions): Promise<SceneMeta> {
@@ -92,10 +96,18 @@ export class InMemorySceneStore implements SceneStore {
       const now = new Date().toISOString()
       const nodeCount = Object.keys(opts.graph.nodes ?? {}).length
       const serialized = JSON.stringify(opts.graph)
+      const projectId = opts.projectId ?? existing.projectId ?? existing.id
+      this.ensureProject(
+        projectId,
+        opts.name,
+        opts.ownerId ?? existing.ownerId,
+        opts.workspaceId ?? existing.workspaceId ?? null,
+        now,
+      )
       const updated: SceneWithGraph = {
         id: existing.id,
         name: opts.name,
-        projectId: opts.projectId ?? existing.projectId,
+        projectId,
         thumbnailUrl: opts.thumbnailUrl ?? existing.thumbnailUrl,
         version: existing.version + 1,
         createdAt: existing.createdAt,
@@ -112,7 +124,10 @@ export class InMemorySceneStore implements SceneStore {
         graph: opts.graph,
       }
       this.data.set(existing.id, updated)
-      this.touchProject(existing.id, opts.name, updated.updatedAt)
+      this.touchProject(projectId, existing.id, updated.updatedAt)
+      if (existing.projectId && existing.projectId !== projectId) {
+        this.refreshProjectDefault(existing.projectId)
+      }
       return this.toMeta(updated)
     }
 
@@ -124,10 +139,12 @@ export class InMemorySceneStore implements SceneStore {
     const now = new Date().toISOString()
     const serialized = JSON.stringify(opts.graph)
     const nodeCount = Object.keys(opts.graph.nodes ?? {}).length
+    const projectId = opts.projectId ?? id
+    this.ensureProject(projectId, opts.name, opts.ownerId ?? null, opts.workspaceId ?? null, now)
     const record: SceneWithGraph = {
       id,
       name: opts.name,
-      projectId: opts.projectId ?? (this.projects.has(id) ? id : null),
+      projectId,
       thumbnailUrl: opts.thumbnailUrl ?? null,
       version: 1,
       createdAt: now,
@@ -144,7 +161,7 @@ export class InMemorySceneStore implements SceneStore {
       graph: opts.graph,
     }
     this.data.set(id, record)
-    this.touchProject(id, opts.name, now)
+    this.touchProject(projectId, id, now)
     return this.toMeta(record)
   }
 
@@ -181,7 +198,9 @@ export class InMemorySceneStore implements SceneStore {
         `Expected version ${opts.expectedVersion}, have ${rec.version}`,
       )
     }
-    return this.data.delete(id)
+    const removed = this.data.delete(id)
+    if (removed && rec.projectId) this.refreshProjectDefault(rec.projectId)
+    return removed
   }
 
   async rename(id: string, newName: string, opts?: SceneMutateOptions): Promise<SceneMeta> {
@@ -199,25 +218,56 @@ export class InMemorySceneStore implements SceneStore {
       updatedAt: new Date().toISOString(),
     }
     this.data.set(id, updated)
-    this.touchProject(id, newName, updated.updatedAt)
+    if (updated.projectId) this.touchProject(updated.projectId, id, updated.updatedAt)
     return this.toMeta(updated)
   }
 
-  private touchProject(id: string, name: string, updatedAt: string): void {
-    const existing = this.projects.get(id)
-    if (existing) {
-      this.projects.set(id, { ...existing, name, updatedAt })
-      return
-    }
+  private ensureProject(
+    id: string,
+    name: string,
+    ownerId: string | null,
+    workspaceId: string | null,
+    now: string,
+  ): void {
+    if (this.projects.has(id)) return
     this.projects.set(id, {
       id,
       name,
-      ownerId: null,
-      workspaceId: null,
+      ownerId,
+      workspaceId,
       isPrivate: true,
       thumbnailUrl: null,
-      createdAt: updatedAt,
+      defaultSceneId: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+  }
+
+  private touchProject(id: string, sceneId: string, updatedAt: string): void {
+    const project = this.projects.get(id)
+    if (!project) return
+    this.projects.set(id, {
+      ...project,
+      defaultSceneId:
+        sceneId === id || project.defaultSceneId === null ? sceneId : project.defaultSceneId,
       updatedAt,
+    })
+  }
+
+  private refreshProjectDefault(id: string): void {
+    const project = this.projects.get(id)
+    if (!project) return
+    const scenes = Array.from(this.data.values())
+      .filter((scene) => scene.projectId === id)
+      .sort((a, b) => {
+        if (a.id === id) return -1
+        if (b.id === id) return 1
+        return a.updatedAt < b.updatedAt ? 1 : -1
+      })
+    this.projects.set(id, {
+      ...project,
+      defaultSceneId: scenes[0]?.id ?? null,
+      updatedAt: new Date().toISOString(),
     })
   }
 
@@ -245,13 +295,20 @@ export class InMemorySceneStore implements SceneStore {
 
   private toProjectStatus(id: string): ProjectStatus {
     const project = this.projects.get(id)
-    const scene = this.data.get(id)
+    const scenes = Array.from(this.data.values()).filter((scene) => scene.projectId === id)
+    const scene =
+      scenes.find((candidate) => candidate.id === project?.defaultSceneId) ??
+      scenes.find((candidate) => candidate.id === id) ??
+      scenes.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]
     const now = new Date().toISOString()
-    const editorUrl = `/scene/${id}`
+    const defaultSceneId = scene?.id ?? null
+    const editorUrl = `/scene/${defaultSceneId ?? id}`
     return {
       id,
       projectId: id,
-      name: scene?.name ?? project?.name ?? id,
+      defaultSceneId,
+      sceneCount: scenes.length,
+      name: project?.name ?? scene?.name ?? id,
       editorUrl,
       url: editorUrl,
       ownerId: scene?.ownerId ?? project?.ownerId ?? null,

@@ -13,6 +13,8 @@ export const createProjectInput = {
 export const createProjectOutput = {
   id: z.string(),
   projectId: z.string(),
+  defaultSceneId: z.string().nullable(),
+  sceneCount: z.number().int().nonnegative(),
   name: z.string(),
   editorUrl: z.string(),
   url: z.string(),
