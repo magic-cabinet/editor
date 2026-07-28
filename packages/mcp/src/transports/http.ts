@@ -33,8 +33,10 @@ export type HttpTransportOptions = {
   rateLimitPerMinute?: number
 }
 
+export type McpServerFactory = () => McpServer
+
 /**
- * Attach an `McpServer` to a Streamable HTTP transport bound to a local port.
+ * Attach per-session `McpServer` instances to a Streamable HTTP endpoint.
  *
  * Uses the SDK's Node-flavored `StreamableHTTPServerTransport`, which accepts
  * `IncomingMessage`/`ServerResponse` directly via `handleRequest(req, res)`.
@@ -46,7 +48,7 @@ export type HttpTransportOptions = {
  * configure an auth token.
  */
 export async function connectHttp(
-  server: McpServer,
+  createMcpServer: McpServerFactory,
   port: number,
   options: HttpTransportOptions = {},
 ): Promise<HttpTransportHandle> {
@@ -63,14 +65,13 @@ export async function connectHttp(
     rateLimitPerMinute: options.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE,
   })
 
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  })
-  await server.connect(transport)
-
+  const sessions = new Map<
+    string,
+    { server: McpServer; transport: StreamableHTTPServerTransport }
+  >()
   const httpServer = createServer((req, res) => {
     if (!guard(req, res)) return
-    transport.handleRequest(req, res).catch((err) => {
+    handleMcpRequest(req, res).catch((err) => {
       // Log to stderr; never touch stdout (stdio transport uses it).
       console.error('[pascal-mcp] http transport error', err)
       if (!res.writableEnded) {
@@ -82,6 +83,46 @@ export async function connectHttp(
       }
     })
   })
+
+  async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const sessionId = headerValue(req.headers['mcp-session-id'])
+    if (sessionId) {
+      const session = sessions.get(sessionId)
+      if (!session) {
+        sendJsonRpcError(res, 404, -32001, 'Session not found')
+        return
+      }
+      await session.transport.handleRequest(req, res)
+      return
+    }
+
+    if (req.method !== 'POST') {
+      sendJsonRpcError(res, 400, -32000, 'Missing MCP session ID')
+      return
+    }
+
+    const server = createMcpServer()
+    let transport: StreamableHTTPServerTransport
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (id) => {
+        sessions.set(id, { server, transport })
+      },
+      onsessionclosed: (id) => {
+        sessions.delete(id)
+      },
+    })
+    transport.onclose = () => {
+      const id = transport.sessionId
+      if (id) sessions.delete(id)
+    }
+
+    await server.connect(transport)
+    await transport.handleRequest(req, res)
+    if (!transport.sessionId) {
+      await server.close()
+    }
+  }
 
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => {
@@ -104,13 +145,15 @@ export async function connectHttp(
     host,
     port: boundPort,
     close: async () => {
+      const activeServers = [...sessions.values()].map((session) => session.server)
+      sessions.clear()
+      await Promise.allSettled(activeServers.map((server) => server.close()))
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => {
           if (err) reject(err)
           else resolve()
         })
       })
-      await transport.close()
     },
   }
 }
@@ -217,6 +260,19 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
   }
   res.writeHead(status).end(JSON.stringify(payload))
+}
+
+function sendJsonRpcError(
+  res: ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+): void {
+  sendJson(res, status, {
+    jsonrpc: '2.0',
+    error: { code, message },
+    id: null,
+  })
 }
 
 function safeEqual(a: string, b: string): boolean {
