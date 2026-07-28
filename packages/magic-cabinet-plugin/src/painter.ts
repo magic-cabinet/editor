@@ -54,8 +54,23 @@ import { type MagicSlotId, slotForMaterialKey } from './slots'
  * `painter.test.ts`, which asserts the upstream behaviour this compensates
  * for — so if upstream closes the gap, that test fails and this branch can be
  * deleted rather than quietly outliving its reason.
+ *
+ * Three *and* six digits, because six-only would reproduce the very defect
+ * this branch exists to avoid, one character narrower. The default position
+ * this delegates to does no validation at all — `resolveSlotDefaultMaterial`
+ * hands anything non-`library:` straight to `THREE.Color.setStyle`, which
+ * accepts `#fff` (→ `ffffff`), `#1f6` (→ `11ff66`) and CSS names like
+ * `rebeccapurple`. So `#fff` as a slot *default* renders and, under a
+ * six-digit-only test, the same `#fff` as an *override* silently fell back.
+ *
+ * Not widened all the way to `setStyle`'s grammar, though: an unrecognised
+ * string there does not throw. `THREE.Color` logs "Unknown color" and leaves
+ * the colour white, so accepting names would turn a typo'd ref into a white
+ * surface instead of the ported finish — a worse failure than the one being
+ * fixed. Hex is self-validating; names are not. That asymmetry is the whole
+ * reason for the bound.
  */
-const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+const HEX_COLOR = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
 
 export type SlotPainter = {
   /** Material for a surface, honouring any paint override on its slot. */

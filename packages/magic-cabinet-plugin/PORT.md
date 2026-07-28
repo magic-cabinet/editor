@@ -124,6 +124,16 @@ Verified live: `PUT /api/scenes/:id` writing `slots: {front: '#1f6feb'}` onto th
 14 cabinets turned every door blue and left carcass, countertop, backsplash, cooktop
 glass and sink basins untouched.
 
+**Where `HEX_COLOR`'s bound comes from.** Three *and* six digits, and nothing else.
+`resolveSlotDefaultMaterial` does no validation — anything non-`library:` goes straight to
+`THREE.Color.setStyle`, measured as accepting `#fff` → `ffffff`, `#1f6` → `11ff66`, and
+CSS names like `rebeccapurple` → `663399`. So six-digit-only would have dropped `#fff` in
+the *override* position while the identical string rendered in the *default* position —
+this branch reproducing its own bug one character narrower. Names stay out for the
+opposite reason: `setStyle` does not throw on an unknown string, it logs and leaves the
+colour white, so accepting them converts a typo into a white surface instead of the ported
+finish. Hex self-validates; names do not.
+
 ### Dangling library refs — the same silence, and it bit us first
 
 A `library:<id>` naming a material that does not exist fails **identically** to the hex

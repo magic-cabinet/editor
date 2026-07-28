@@ -161,6 +161,43 @@ describe('paint override precedence', () => {
     expect((material as { color: { getHexString(): string } }).color.getHexString()).toBe('1f6feb')
   })
 
+  test('shorthand hex paints too, and a colour *name* deliberately does not', () => {
+    // The bound on `HEX_COLOR`, from both sides.
+    //
+    // Three digits, because the default position this delegates to does no
+    // validation — `resolveSlotDefaultMaterial` hands anything non-`library:`
+    // to `THREE.Color.setStyle`. So `#fff` renders as a slot *default*, and a
+    // six-digit-only override test would silently drop the same string: the
+    // exact defect this branch exists to avoid, one character narrower.
+    //
+    // Names not, because `setStyle` does not throw on an unknown string — it
+    // logs and leaves the colour white. Accepting names would turn a typo'd
+    // ref into a white surface instead of the ported finish, which is a worse
+    // failure than the one being fixed. Hex self-validates; names do not.
+    const paint = (ref: string) =>
+      createSlotPainter(component({ slots: { front: ref } }), undefined).material('front', {
+        key: 'cabinet-panel:mdf',
+        style: STYLE,
+      })
+    const hex = (material: unknown) =>
+      (material as { color: { getHexString(): string } }).color.getHexString()
+
+    expect(hex(paint('#fff'))).toBe('ffffff')
+    expect(hex(paint('#1f6'))).toBe('11ff66')
+
+    // Control: an unpainted front is what "fell through" looks like, so the
+    // assertions above mean nothing unless it differs from all of them.
+    const unpainted = hex(
+      createSlotPainter(component(), undefined).material('front', {
+        key: 'cabinet-panel:mdf',
+        style: STYLE,
+      }),
+    )
+    expect([unpainted]).not.toContain('ffffff')
+    expect(hex(paint('rebeccapurple'))).toBe(unpainted)
+    expect(hex(paint('#12345'))).toBe(unpainted)
+  })
+
   test('…and that is a deliberate divergence from every built-in kind', () => {
     // The pin. Hex is NOT a `MaterialRef`: `ParsedMaterialRef` is exactly
     // `library` | `scene`, and `SlotDeclaration.default` documents hex as the
