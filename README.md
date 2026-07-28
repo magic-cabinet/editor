@@ -16,6 +16,11 @@ The development stack runs the Magic Cabinet editor and its Streamable HTTP MCP
 server in one container. Both processes share the same persistent scene database,
 so an MCP edit appears live in the open 3D editor.
 
+Compose enables the MCP server's single-tenant local-workspace mode so the
+authenticated MCP connection can edit scenes created by the co-located editor.
+Do not enable `PASCAL_MCP_LOCAL_WORKSPACE` in a multi-tenant deployment; provide
+a trusted `resolveIdentity` adapter there instead.
+
 ### 1. Start the stack
 
 Docker Desktop is the only prerequisite.

@@ -33,6 +33,12 @@ export type HttpTransportOptions = {
   /** Per-client request cap per minute. Set <= 0 to disable. */
   rateLimitPerMinute?: number
   /**
+   * Keep authenticated sessions in the unowned local workspace used by the
+   * co-located editor. Only enable this for a single-tenant local/showroom
+   * deployment; hosted multi-tenant adapters should use `resolveIdentity`.
+   */
+  localWorkspace?: boolean
+  /**
    * Resolve authenticated creator identity after transport authentication.
    * Hosted adapters should derive this from their trusted auth middleware.
    */
@@ -130,17 +136,23 @@ export async function connectHttp(
       : null
     const identity = options.resolveIdentity
       ? await options.resolveIdentity(req)
-      : authToken
+      : options.localWorkspace
         ? {
-            actor: { kind: 'service' as const, id: serviceId },
-            ownerId: serviceId,
-            workspaceId: null,
-          }
-        : {
             actor: { kind: 'local' as const, id: null },
             ownerId: null,
             workspaceId: null,
           }
+        : authToken
+          ? {
+              actor: { kind: 'service' as const, id: serviceId },
+              ownerId: serviceId,
+              workspaceId: null,
+            }
+          : {
+              actor: { kind: 'local' as const, id: null },
+              ownerId: null,
+              workspaceId: null,
+            }
     const context = freezeCreationContext({
       ...identity,
       sessionId: nextSessionId,

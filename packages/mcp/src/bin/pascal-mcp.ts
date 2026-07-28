@@ -75,6 +75,7 @@ async function main(): Promise<void> {
       host: values.host,
       authToken: values['auth-token'],
       allowedOrigins: values['cors-origin'],
+      localWorkspace: process.env.PASCAL_MCP_LOCAL_WORKSPACE === '1',
     })
     console.error(`[pascal-mcp] HTTP server listening on ${handle.host}:${handle.port}`)
     const shutdown = async () => {

@@ -189,6 +189,38 @@ test('connectHttp rejects a resumed session when the authenticated identity chan
   }
 })
 
+test('connectHttp can share an authenticated single-tenant local workspace', async () => {
+  const contexts: CreationContext[] = []
+  createServer = (context) => {
+    contexts.push(context)
+    const bridge = new SceneBridge()
+    bridge.loadDefault()
+    return createPascalMcpServer({ bridge, context })
+  }
+  handle = await connectHttp(createServer, 0, {
+    authToken: 'secret',
+    localWorkspace: true,
+  })
+  const client = new Client({ name: 'local-workspace', version: '0.0.0' })
+
+  try {
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${handle.port}/mcp`), {
+        requestInit: { headers: { authorization: 'Bearer secret' } },
+      }),
+    )
+    expect(contexts).toHaveLength(1)
+    expect(contexts[0]).toMatchObject({
+      actor: { kind: 'local', id: null },
+      ownerId: null,
+      workspaceId: null,
+      source: 'mcp',
+    })
+  } finally {
+    await client.close()
+  }
+})
+
 test('connectHttp close() stops the server', async () => {
   handle = await connectHttp(createServer, 0, { authToken: '' })
   const port = handle.port

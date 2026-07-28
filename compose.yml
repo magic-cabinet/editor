@@ -10,6 +10,7 @@ services:
       NEXT_PUBLIC_PASCAL_PRODUCT_PROFILE: magic-cabinet
       PASCAL_DATA_DIR: /data
       PASCAL_MCP_HTTP_TOKEN: ${PASCAL_MCP_HTTP_TOKEN:-magic-cabinet-dev}
+      PASCAL_MCP_LOCAL_WORKSPACE: "1"
     ports:
       - "${MAGIC_CABINET_PORT:-8080}:8080"
     volumes:
