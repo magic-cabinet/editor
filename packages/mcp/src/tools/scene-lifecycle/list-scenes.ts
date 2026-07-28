@@ -21,6 +21,7 @@ export const listScenesOutput = {
       createdAt: z.string(),
       updatedAt: z.string(),
       ownerId: z.string().nullable(),
+      workspaceId: z.string().nullable().optional(),
       sizeBytes: z.number(),
       nodeCount: z.number(),
       editorUrl: z.string().optional(),

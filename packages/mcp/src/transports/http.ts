@@ -1,7 +1,8 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { type CreationActor, type CreationContext, freezeCreationContext } from '../context'
 
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 120
@@ -31,9 +32,24 @@ export type HttpTransportOptions = {
   allowedOrigins?: string[]
   /** Per-client request cap per minute. Set <= 0 to disable. */
   rateLimitPerMinute?: number
+  /**
+   * Resolve authenticated creator identity after transport authentication.
+   * Hosted adapters should derive this from their trusted auth middleware.
+   */
+  resolveIdentity?: (request: IncomingMessage) =>
+    | {
+        actor: CreationActor
+        ownerId: string | null
+        workspaceId: string | null
+      }
+    | Promise<{
+        actor: CreationActor
+        ownerId: string | null
+        workspaceId: string | null
+      }>
 }
 
-export type McpServerFactory = () => McpServer
+export type McpServerFactory = (context: CreationContext) => McpServer
 
 /**
  * Attach per-session `McpServer` instances to a Streamable HTTP endpoint.
@@ -67,7 +83,7 @@ export async function connectHttp(
 
   const sessions = new Map<
     string,
-    { server: McpServer; transport: StreamableHTTPServerTransport }
+    { server: McpServer; transport: StreamableHTTPServerTransport; context: CreationContext }
   >()
   const httpServer = createServer((req, res) => {
     if (!guard(req, res)) return
@@ -92,6 +108,13 @@ export async function connectHttp(
         sendJsonRpcError(res, 404, -32001, 'Session not found')
         return
       }
+      if (options.resolveIdentity) {
+        const identity = await options.resolveIdentity(req)
+        if (!sameIdentity(session.context, identity)) {
+          sendJsonRpcError(res, 403, -32003, 'Session identity mismatch')
+          return
+        }
+      }
       await session.transport.handleRequest(req, res)
       return
     }
@@ -101,12 +124,34 @@ export async function connectHttp(
       return
     }
 
-    const server = createMcpServer()
+    const nextSessionId = randomUUID()
+    const serviceId = authToken
+      ? `service_${createHash('sha256').update(authToken).digest('hex').slice(0, 24)}`
+      : null
+    const identity = options.resolveIdentity
+      ? await options.resolveIdentity(req)
+      : authToken
+        ? {
+            actor: { kind: 'service' as const, id: serviceId },
+            ownerId: serviceId,
+            workspaceId: null,
+          }
+        : {
+            actor: { kind: 'local' as const, id: null },
+            ownerId: null,
+            workspaceId: null,
+          }
+    const context = freezeCreationContext({
+      ...identity,
+      sessionId: nextSessionId,
+      source: 'mcp',
+    })
+    const server = createMcpServer(context)
     let transport: StreamableHTTPServerTransport
     transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      sessionIdGenerator: () => nextSessionId,
       onsessioninitialized: (id) => {
-        sessions.set(id, { server, transport })
+        sessions.set(id, { server, transport, context })
       },
       onsessionclosed: (id) => {
         sessions.delete(id)
@@ -156,6 +201,22 @@ export async function connectHttp(
       })
     },
   }
+}
+
+function sameIdentity(
+  context: CreationContext,
+  identity: {
+    actor: CreationActor
+    ownerId: string | null
+    workspaceId: string | null
+  },
+): boolean {
+  return (
+    context.actor.kind === identity.actor.kind &&
+    context.actor.id === identity.actor.id &&
+    context.ownerId === identity.ownerId &&
+    context.workspaceId === identity.workspaceId
+  )
 }
 
 function createHttpGuard(options: {

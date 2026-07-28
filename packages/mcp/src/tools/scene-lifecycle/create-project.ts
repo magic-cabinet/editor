@@ -17,6 +17,7 @@ export const createProjectOutput = {
   editorUrl: z.string(),
   url: z.string(),
   ownerId: z.string().nullable(),
+  workspaceId: z.string().nullable().optional(),
   thumbnailUrl: z.string().nullable(),
   publishedVersion: z.number().nullable(),
   latestVersion: z.number().nullable(),
@@ -62,6 +63,7 @@ export function registerCreateProject(server: McpServer, operations: SceneOperat
           name: status.name,
           projectId: status.projectId,
           ownerId: status.ownerId,
+          workspaceId: status.workspaceId,
           thumbnailUrl: status.thumbnailUrl,
           version: status.version,
         })

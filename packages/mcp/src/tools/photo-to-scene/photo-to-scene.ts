@@ -12,7 +12,6 @@ import {
 } from '@pascal-app/core/schema'
 import { z } from 'zod'
 import type { SceneOperations } from '../../operations'
-import { appendLiveSceneEvent } from '../live-sync'
 import { measurement } from '../measurement'
 
 /**
@@ -379,12 +378,12 @@ export function registerPhotoToScene(server: McpServer, bridge: SceneOperations)
 
       // 4. Save or return inline.
       if (save) {
-        const meta = await bridge.saveScene({
+        const { meta } = await bridge.commitScene({
           name,
           graph,
+          eventKind: 'photo_to_scene',
         })
         bridge.setActiveScene(meta)
-        await appendLiveSceneEvent(bridge, meta.id, meta.version, 'photo_to_scene', graph)
         const payload: {
           sceneId: string
           url: string

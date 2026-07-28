@@ -1266,7 +1266,7 @@ export type SceneState = {
 
 // type PartializedStoreState = Pick<SceneState, 'rootNodeIds' | 'nodes'>;
 
-type UseSceneStore = UseBoundStore<StoreApi<SceneState>> & {
+export type UseSceneStore = UseBoundStore<StoreApi<SceneState>> & {
   temporal: StoreApi<
     TemporalState<
       Pick<SceneState, 'nodes' | 'rootNodeIds' | 'collections' | 'materials' | 'installedPlugins'>
@@ -1284,316 +1284,321 @@ function sceneHistorySnapshotFromState(
   return { nodes, rootNodeIds, collections, materials, installedPlugins }
 }
 
-const useScene: UseSceneStore = create<SceneState>()(
-  temporal(
-    (set, get) => ({
-      // 1. Flat dictionary of all nodes
-      nodes: {},
+export function createSceneStore(): UseSceneStore {
+  return create<SceneState>()(
+    temporal(
+      (set, get) => ({
+        // 1. Flat dictionary of all nodes
+        nodes: {},
 
-      // 2. Root node IDs
-      rootNodeIds: [],
+        // 2. Root node IDs
+        rootNodeIds: [],
 
-      // 3. Dirty set
-      dirtyNodes: new Set<AnyNodeId>(),
+        // 3. Dirty set
+        dirtyNodes: new Set<AnyNodeId>(),
 
-      // 4. Collections
-      collections: {} as Record<CollectionId, Collection>,
-      materials: {} as Record<SceneMaterialId, SceneMaterial>,
-      installedPlugins: [],
-      hasExplicitPluginInstallState: false,
+        // 4. Collections
+        collections: {} as Record<CollectionId, Collection>,
+        materials: {} as Record<SceneMaterialId, SceneMaterial>,
+        installedPlugins: [],
+        hasExplicitPluginInstallState: false,
 
-      // 5. Read-only lock
-      readOnly: false,
-      setReadOnly: (readOnly: boolean) => set({ readOnly }),
+        // 5. Read-only lock
+        readOnly: false,
+        setReadOnly: (readOnly: boolean) => set({ readOnly }),
 
-      unloadScene: () => {
-        set({
-          nodes: {},
-          rootNodeIds: [],
-          dirtyNodes: new Set<AnyNodeId>(),
-          collections: {},
-          materials: {},
-          installedPlugins: [],
-          hasExplicitPluginInstallState: false,
-        })
-      },
+        unloadScene: () => {
+          set({
+            nodes: {},
+            rootNodeIds: [],
+            dirtyNodes: new Set<AnyNodeId>(),
+            collections: {},
+            materials: {},
+            installedPlugins: [],
+            hasExplicitPluginInstallState: false,
+          })
+        },
 
-      clearScene: () => {
-        const installedPlugins = get().installedPlugins
-        const hasExplicitPluginInstallState = get().hasExplicitPluginInstallState
-        get().unloadScene()
-        get().loadScene() // Default scene
-        set({ installedPlugins, hasExplicitPluginInstallState })
-      },
+        clearScene: () => {
+          const installedPlugins = get().installedPlugins
+          const hasExplicitPluginInstallState = get().hasExplicitPluginInstallState
+          get().unloadScene()
+          get().loadScene() // Default scene
+          set({ installedPlugins, hasExplicitPluginInstallState })
+        },
 
-      setScene: (nodes, rootNodeIds, extra) => {
-        // Apply backward compatibility migrations
-        const { nodes: patchedNodes, mintedMaterials } = migrateNodes(nodes)
-        // Scene materials minted by the wall legacy→slots migration join the
-        // loaded palette (existing refs win on id collision — there are none,
-        // ids are freshly generated).
-        const materials = { ...mintedMaterials, ...(extra?.materials ?? {}) }
+        setScene: (nodes, rootNodeIds, extra) => {
+          // Apply backward compatibility migrations
+          const { nodes: patchedNodes, mintedMaterials } = migrateNodes(nodes)
+          // Scene materials minted by the wall legacy→slots migration join the
+          // loaded palette (existing refs win on id collision — there are none,
+          // ids are freshly generated).
+          const materials = { ...mintedMaterials, ...(extra?.materials ?? {}) }
 
-        // Remove orphans: nodes whose parentId points to a non-existent node
-        const cleanedNodes = { ...patchedNodes }
-        for (const node of Object.values(cleanedNodes)) {
-          if (node.parentId && !cleanedNodes[node.parentId]) {
-            console.warn(
-              '[Scene] Removing orphan node',
-              node.id,
-              '(parentId',
-              node.parentId,
-              'not found)',
-            )
-            delete cleanedNodes[node.id]
-          }
-        }
-
-        const normalizedRootNodeIds = normalizeRootNodeIds(cleanedNodes, rootNodeIds)
-        const reachableNodeIds = collectReachableNodeIds(cleanedNodes, normalizedRootNodeIds)
-        if (normalizedRootNodeIds.length > 0) {
+          // Remove orphans: nodes whose parentId points to a non-existent node
+          const cleanedNodes = { ...patchedNodes }
           for (const node of Object.values(cleanedNodes)) {
-            if (reachableNodeIds.has(node.id as AnyNodeId)) continue
-            console.warn('[Scene] Removing unreachable node', node.id)
-            delete cleanedNodes[node.id]
+            if (node.parentId && !cleanedNodes[node.parentId]) {
+              console.warn(
+                '[Scene] Removing orphan node',
+                node.id,
+                '(parentId',
+                node.parentId,
+                'not found)',
+              )
+              delete cleanedNodes[node.id]
+            }
           }
-        }
 
-        // Single tracked `set`: with zundo, every tracked write pushes the
-        // pre-write state onto `pastStates`. Writing the scene in two steps
-        // (as this used to) exposed a half-normalized intermediate state —
-        // and the pre-load (possibly empty) state — as undo targets.
-        set({
-          nodes: cleanedNodes,
-          rootNodeIds: normalizedRootNodeIds,
-          dirtyNodes: new Set<AnyNodeId>(),
-          collections: extra?.collections ?? {},
-          materials,
-          installedPlugins: Array.from(new Set(extra?.installedPlugins ?? [])),
-          hasExplicitPluginInstallState: extra?.hasExplicitPluginInstallState ?? false,
-        })
-        // Mark all nodes as dirty to trigger re-validation
-        Object.values(cleanedNodes).forEach((node) => {
-          get().markDirty(node.id)
-        })
-      },
-
-      setInstalledPlugins: (pluginIds, options) => {
-        if (get().readOnly) return
-        const nextInstalledPlugins = Array.from(new Set(pluginIds))
-        const previousInstalledPlugins = get().installedPlugins
-        const dirtyNodes = new Set(get().dirtyNodes)
-        for (const node of Object.values(get().nodes)) {
-          if (!getNodePluginId(node.type)) continue
-          if (!isNodeKindEnabled(node.type, nextInstalledPlugins)) {
-            dirtyNodes.delete(node.id)
-          } else if (!isNodeKindEnabled(node.type, previousInstalledPlugins)) {
-            if (nodeRegistry.get(node.type)?.dirtyTracking !== false) dirtyNodes.add(node.id)
+          const normalizedRootNodeIds = normalizeRootNodeIds(cleanedNodes, rootNodeIds)
+          const reachableNodeIds = collectReachableNodeIds(cleanedNodes, normalizedRootNodeIds)
+          if (normalizedRootNodeIds.length > 0) {
+            for (const node of Object.values(cleanedNodes)) {
+              if (reachableNodeIds.has(node.id as AnyNodeId)) continue
+              console.warn('[Scene] Removing unreachable node', node.id)
+              delete cleanedNodes[node.id]
+            }
           }
-        }
-        set({
-          installedPlugins: nextInstalledPlugins,
-          hasExplicitPluginInstallState: options?.explicit ?? get().hasExplicitPluginInstallState,
-          dirtyNodes,
-        })
-      },
 
-      loadScene: () => {
-        if (get().rootNodeIds.length > 0) {
-          // Assign all nodes as dirty to force re-validation
-          Object.values(get().nodes).forEach((node) => {
+          // Single tracked `set`: with zundo, every tracked write pushes the
+          // pre-write state onto `pastStates`. Writing the scene in two steps
+          // (as this used to) exposed a half-normalized intermediate state —
+          // and the pre-load (possibly empty) state — as undo targets.
+          set({
+            nodes: cleanedNodes,
+            rootNodeIds: normalizedRootNodeIds,
+            dirtyNodes: new Set<AnyNodeId>(),
+            collections: extra?.collections ?? {},
+            materials,
+            installedPlugins: Array.from(new Set(extra?.installedPlugins ?? [])),
+            hasExplicitPluginInstallState: extra?.hasExplicitPluginInstallState ?? false,
+          })
+          // Mark all nodes as dirty to trigger re-validation
+          Object.values(cleanedNodes).forEach((node) => {
             get().markDirty(node.id)
           })
-          return // Scene already loaded
-        }
+        },
 
-        // Create hierarchy: Site → Building → Level
-        const level0 = LevelNode.parse({
-          level: 0,
-          children: [],
-          height: 2.5,
-        })
+        setInstalledPlugins: (pluginIds, options) => {
+          if (get().readOnly) return
+          const nextInstalledPlugins = Array.from(new Set(pluginIds))
+          const previousInstalledPlugins = get().installedPlugins
+          const dirtyNodes = new Set(get().dirtyNodes)
+          for (const node of Object.values(get().nodes)) {
+            if (!getNodePluginId(node.type)) continue
+            if (!isNodeKindEnabled(node.type, nextInstalledPlugins)) {
+              dirtyNodes.delete(node.id)
+            } else if (!isNodeKindEnabled(node.type, previousInstalledPlugins)) {
+              if (nodeRegistry.get(node.type)?.dirtyTracking !== false) dirtyNodes.add(node.id)
+            }
+          }
+          set({
+            installedPlugins: nextInstalledPlugins,
+            hasExplicitPluginInstallState: options?.explicit ?? get().hasExplicitPluginInstallState,
+            dirtyNodes,
+          })
+        },
 
-        const building = BuildingNode.parse({
-          children: [level0.id],
-        })
+        loadScene: () => {
+          if (get().rootNodeIds.length > 0) {
+            // Assign all nodes as dirty to force re-validation
+            Object.values(get().nodes).forEach((node) => {
+              get().markDirty(node.id)
+            })
+            return // Scene already loaded
+          }
 
-        const site = SiteNode.parse({
-          children: [building.id],
-        })
+          // Create hierarchy: Site → Building → Level
+          const level0 = LevelNode.parse({
+            level: 0,
+            children: [],
+            height: 2.5,
+          })
 
-        // Define all nodes flat
-        const nodes: Record<AnyNodeId, AnyNode> = {
-          [site.id]: site,
-          [building.id]: building,
-          [level0.id]: level0,
-        }
+          const building = BuildingNode.parse({
+            children: [level0.id],
+          })
 
-        // Site is the root
-        const rootNodeIds = [site.id]
+          const site = SiteNode.parse({
+            children: [building.id],
+          })
 
-        set({ nodes, rootNodeIds })
-      },
+          // Define all nodes flat
+          const nodes: Record<AnyNodeId, AnyNode> = {
+            [site.id]: site,
+            [building.id]: building,
+            [level0.id]: level0,
+          }
 
-      markDirty: (id) => {
-        const node = get().nodes[id]
-        if (node && !isNodeKindEnabled(node.type, get().installedPlugins)) return
-        if (node && nodeRegistry.get(node.type)?.dirtyTracking === false) return
-        get().dirtyNodes.add(id)
-      },
+          // Site is the root
+          const rootNodeIds = [site.id]
 
-      clearDirty: (id) => {
-        get().dirtyNodes.delete(id)
-      },
+          set({ nodes, rootNodeIds })
+        },
 
-      createNodes: (ops) => nodeActions.createNodesAction(set, get, ops),
-      createNode: (node, parentId) => nodeActions.createNodesAction(set, get, [{ node, parentId }]),
-      applyNodeChanges: (changes) => nodeActions.applyNodeChangesAction(set, get, changes),
+        markDirty: (id) => {
+          const node = get().nodes[id]
+          if (node && !isNodeKindEnabled(node.type, get().installedPlugins)) return
+          if (node && nodeRegistry.get(node.type)?.dirtyTracking === false) return
+          get().dirtyNodes.add(id)
+        },
 
-      updateNodes: (updates) => nodeActions.updateNodesAction(set, get, updates),
-      updateNode: (id, data) => nodeActions.updateNodesAction(set, get, [{ id, data }]),
+        clearDirty: (id) => {
+          get().dirtyNodes.delete(id)
+        },
 
-      // --- DELETE ---
+        createNodes: (ops) => nodeActions.createNodesAction(set, get, ops),
+        createNode: (node, parentId) =>
+          nodeActions.createNodesAction(set, get, [{ node, parentId }]),
+        applyNodeChanges: (changes) => nodeActions.applyNodeChangesAction(set, get, changes),
 
-      deleteNodes: (ids) => nodeActions.deleteNodesAction(set, get, ids),
+        updateNodes: (updates) => nodeActions.updateNodesAction(set, get, updates),
+        updateNode: (id, data) => nodeActions.updateNodesAction(set, get, [{ id, data }]),
 
-      deleteNode: (id) => nodeActions.deleteNodesAction(set, get, [id]),
+        // --- DELETE ---
 
-      // --- COLLECTIONS ---
+        deleteNodes: (ids) => nodeActions.deleteNodesAction(set, get, ids),
 
-      createCollection: (name, nodeIds = []) => {
-        if (get().readOnly) return '' as CollectionId
-        const id = generateCollectionId()
-        const collection: Collection = { id, name, nodeIds }
-        set((state) => {
-          const nextCollections = { ...state.collections, [id]: collection }
-          // Denormalize: stamp collectionId onto each node
-          const nextNodes = { ...state.nodes }
-          for (const nodeId of nodeIds) {
-            const node = nextNodes[nodeId]
-            if (!node) continue
+        deleteNode: (id) => nodeActions.deleteNodesAction(set, get, [id]),
+
+        // --- COLLECTIONS ---
+
+        createCollection: (name, nodeIds = []) => {
+          if (get().readOnly) return '' as CollectionId
+          const id = generateCollectionId()
+          const collection: Collection = { id, name, nodeIds }
+          set((state) => {
+            const nextCollections = { ...state.collections, [id]: collection }
+            // Denormalize: stamp collectionId onto each node
+            const nextNodes = { ...state.nodes }
+            for (const nodeId of nodeIds) {
+              const node = nextNodes[nodeId]
+              if (!node) continue
+              const existing =
+                ('collectionIds' in node ? (node.collectionIds as CollectionId[]) : undefined) ?? []
+              nextNodes[nodeId] = { ...node, collectionIds: [...existing, id] } as AnyNode
+            }
+            return { collections: nextCollections, nodes: nextNodes }
+          })
+          return id
+        },
+
+        deleteCollection: (id) => {
+          if (get().readOnly) return
+          set((state) => {
+            const col = state.collections[id]
+            const nextCollections = { ...state.collections }
+            delete nextCollections[id]
+            // Remove collectionId from all member nodes
+            const nextNodes = { ...state.nodes }
+            for (const nodeId of col?.nodeIds ?? []) {
+              const node = nextNodes[nodeId]
+              if (!(node && 'collectionIds' in node)) continue
+              nextNodes[nodeId] = {
+                ...node,
+                collectionIds: (node.collectionIds as CollectionId[]).filter((cid) => cid !== id),
+              } as AnyNode
+            }
+            return { collections: nextCollections, nodes: nextNodes }
+          })
+        },
+
+        updateCollection: (id, data) => {
+          if (get().readOnly) return
+          set((state) => {
+            const col = state.collections[id]
+            if (!col) return state
+            return { collections: { ...state.collections, [id]: { ...col, ...data } } }
+          })
+        },
+
+        addToCollection: (id, nodeId) => {
+          if (get().readOnly) return
+          set((state) => {
+            const col = state.collections[id]
+            if (!col || col.nodeIds.includes(nodeId)) return state
+            const nextCollections = {
+              ...state.collections,
+              [id]: { ...col, nodeIds: [...col.nodeIds, nodeId] },
+            }
+            const node = state.nodes[nodeId]
+            if (!node) return { collections: nextCollections }
             const existing =
               ('collectionIds' in node ? (node.collectionIds as CollectionId[]) : undefined) ?? []
-            nextNodes[nodeId] = { ...node, collectionIds: [...existing, id] } as AnyNode
-          }
-          return { collections: nextCollections, nodes: nextNodes }
-        })
-        return id
-      },
+            const nextNodes = {
+              ...state.nodes,
+              [nodeId]: { ...node, collectionIds: [...existing, id] } as AnyNode,
+            }
+            return { collections: nextCollections, nodes: nextNodes }
+          })
+        },
 
-      deleteCollection: (id) => {
-        if (get().readOnly) return
-        set((state) => {
-          const col = state.collections[id]
-          const nextCollections = { ...state.collections }
-          delete nextCollections[id]
-          // Remove collectionId from all member nodes
-          const nextNodes = { ...state.nodes }
-          for (const nodeId of col?.nodeIds ?? []) {
-            const node = nextNodes[nodeId]
-            if (!(node && 'collectionIds' in node)) continue
-            nextNodes[nodeId] = {
-              ...node,
-              collectionIds: (node.collectionIds as CollectionId[]).filter((cid) => cid !== id),
-            } as AnyNode
-          }
-          return { collections: nextCollections, nodes: nextNodes }
-        })
-      },
+        removeFromCollection: (id, nodeId) => {
+          if (get().readOnly) return
+          set((state) => {
+            const col = state.collections[id]
+            if (!col) return state
+            const nextCollections = {
+              ...state.collections,
+              [id]: { ...col, nodeIds: col.nodeIds.filter((n) => n !== nodeId) },
+            }
+            const node = state.nodes[nodeId]
+            if (!(node && 'collectionIds' in node)) return { collections: nextCollections }
+            const nextNodes = {
+              ...state.nodes,
+              [nodeId]: {
+                ...node,
+                collectionIds: (node.collectionIds as CollectionId[]).filter((cid) => cid !== id),
+              } as AnyNode,
+            }
+            return { collections: nextCollections, nodes: nextNodes }
+          })
+        },
 
-      updateCollection: (id, data) => {
-        if (get().readOnly) return
-        set((state) => {
-          const col = state.collections[id]
-          if (!col) return state
-          return { collections: { ...state.collections, [id]: { ...col, ...data } } }
-        })
-      },
+        // --- SCENE MATERIALS ---
 
-      addToCollection: (id, nodeId) => {
-        if (get().readOnly) return
-        set((state) => {
-          const col = state.collections[id]
-          if (!col || col.nodeIds.includes(nodeId)) return state
-          const nextCollections = {
-            ...state.collections,
-            [id]: { ...col, nodeIds: [...col.nodeIds, nodeId] },
-          }
-          const node = state.nodes[nodeId]
-          if (!node) return { collections: nextCollections }
-          const existing =
-            ('collectionIds' in node ? (node.collectionIds as CollectionId[]) : undefined) ?? []
-          const nextNodes = {
-            ...state.nodes,
-            [nodeId]: { ...node, collectionIds: [...existing, id] } as AnyNode,
-          }
-          return { collections: nextCollections, nodes: nextNodes }
-        })
-      },
+        addSceneMaterial: (material) => {
+          if (get().readOnly) return
+          set((state) => ({
+            materials: { ...state.materials, [material.id]: material },
+          }))
+        },
 
-      removeFromCollection: (id, nodeId) => {
-        if (get().readOnly) return
-        set((state) => {
-          const col = state.collections[id]
-          if (!col) return state
-          const nextCollections = {
-            ...state.collections,
-            [id]: { ...col, nodeIds: col.nodeIds.filter((n) => n !== nodeId) },
-          }
-          const node = state.nodes[nodeId]
-          if (!(node && 'collectionIds' in node)) return { collections: nextCollections }
-          const nextNodes = {
-            ...state.nodes,
-            [nodeId]: {
-              ...node,
-              collectionIds: (node.collectionIds as CollectionId[]).filter((cid) => cid !== id),
-            } as AnyNode,
-          }
-          return { collections: nextCollections, nodes: nextNodes }
-        })
-      },
+        updateSceneMaterial: (id, data) => {
+          if (get().readOnly) return
+          set((state) => {
+            const material = state.materials[id]
+            if (!material) return state
+            return { materials: { ...state.materials, [id]: { ...material, ...data } } }
+          })
+        },
 
-      // --- SCENE MATERIALS ---
+        removeSceneMaterial: (id) => {
+          if (get().readOnly) return
+          set((state) => {
+            const materials = { ...state.materials }
+            delete materials[id]
+            return { materials }
+          })
+        },
+      }),
+      {
+        partialize: (state: SceneState) => sceneHistorySnapshotFromState(state),
+        equality: (pastState, currentState) => areSceneSnapshotsEqual(pastState, currentState),
+        onSave: (pastState, currentState) => {
+          notifySceneCommit({
+            origin: 'local',
+            before: sceneHistorySnapshotFromState(pastState),
+            current: sceneHistorySnapshotFromState(currentState),
+          })
+        },
+        limit: 50, // Limit to last 50 actions
+      },
+    ),
+  )
+}
 
-      addSceneMaterial: (material) => {
-        if (get().readOnly) return
-        set((state) => ({
-          materials: { ...state.materials, [material.id]: material },
-        }))
-      },
-
-      updateSceneMaterial: (id, data) => {
-        if (get().readOnly) return
-        set((state) => {
-          const material = state.materials[id]
-          if (!material) return state
-          return { materials: { ...state.materials, [id]: { ...material, ...data } } }
-        })
-      },
-
-      removeSceneMaterial: (id) => {
-        if (get().readOnly) return
-        set((state) => {
-          const materials = { ...state.materials }
-          delete materials[id]
-          return { materials }
-        })
-      },
-    }),
-    {
-      partialize: (state: SceneState) => sceneHistorySnapshotFromState(state),
-      equality: (pastState, currentState) => areSceneSnapshotsEqual(pastState, currentState),
-      onSave: (pastState, currentState) => {
-        notifySceneCommit({
-          origin: 'local',
-          before: sceneHistorySnapshotFromState(pastState),
-          current: sceneHistorySnapshotFromState(currentState),
-        })
-      },
-      limit: 50, // Limit to last 50 actions
-    },
-  ),
-)
+const useScene: UseSceneStore = createSceneStore()
 
 export default useScene
 

@@ -1,4 +1,5 @@
 import { SceneBridge } from '../../bridge/scene-bridge'
+import type { CreationContext } from '../../context'
 import { createSceneOperations, type SceneOperations } from '../../operations'
 import {
   type ProjectCreateOptions,
@@ -23,6 +24,7 @@ export function parseToolText(content: StoredTextContent[]): Record<string, unkn
 export function createTestSceneOperations(options?: {
   bridge?: SceneBridge
   store?: InMemorySceneStore
+  context?: CreationContext
 }): {
   bridge: SceneBridge
   store: InMemorySceneStore
@@ -30,7 +32,7 @@ export function createTestSceneOperations(options?: {
 } {
   const bridge = options?.bridge ?? new SceneBridge()
   const store = options?.store ?? new InMemorySceneStore()
-  const operations = createSceneOperations({ bridge, store })
+  const operations = createSceneOperations({ bridge, store, context: options?.context })
   return { bridge, store, operations }
 }
 
@@ -48,6 +50,7 @@ export class InMemorySceneStore implements SceneStore {
       id: string
       name: string
       ownerId: string | null
+      workspaceId: string | null
       isPrivate: boolean
       thumbnailUrl: string | null
       createdAt: string
@@ -64,6 +67,7 @@ export class InMemorySceneStore implements SceneStore {
       id,
       name: opts.name,
       ownerId: opts.ownerId ?? null,
+      workspaceId: opts.workspaceId ?? null,
       isPrivate: opts.isPrivate ?? true,
       thumbnailUrl: null,
       createdAt: now,
@@ -97,12 +101,14 @@ export class InMemorySceneStore implements SceneStore {
         createdAt: existing.createdAt,
         updatedAt: now,
         ownerId: opts.ownerId ?? existing.ownerId,
+        workspaceId: opts.workspaceId ?? existing.workspaceId,
         sizeBytes: serialized.length,
         nodeCount,
         editorUrl: existing.editorUrl ?? `/scene/${existing.id}`,
         url: existing.url ?? `/scene/${existing.id}`,
         published: true,
         graphHash: computeGraphHash(opts.graph),
+        command: opts.command,
         graph: opts.graph,
       }
       this.data.set(existing.id, updated)
@@ -127,12 +133,14 @@ export class InMemorySceneStore implements SceneStore {
       createdAt: now,
       updatedAt: now,
       ownerId: opts.ownerId ?? null,
+      workspaceId: opts.workspaceId ?? null,
       sizeBytes: serialized.length,
       nodeCount,
       editorUrl: `/scene/${id}`,
       url: `/scene/${id}`,
       published: true,
       graphHash: computeGraphHash(opts.graph),
+      command: opts.command,
       graph: opts.graph,
     }
     this.data.set(id, record)
@@ -156,6 +164,9 @@ export class InMemorySceneStore implements SceneStore {
     }
     if (opts?.ownerId !== undefined) {
       scenes = scenes.filter((s) => s.ownerId === opts.ownerId)
+    }
+    if (opts?.workspaceId !== undefined) {
+      scenes = scenes.filter((s) => s.workspaceId === opts.workspaceId)
     }
     scenes.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
     if (opts?.limit !== undefined) scenes = scenes.slice(0, opts.limit)
@@ -202,6 +213,7 @@ export class InMemorySceneStore implements SceneStore {
       id,
       name,
       ownerId: null,
+      workspaceId: null,
       isPrivate: true,
       thumbnailUrl: null,
       createdAt: updatedAt,
@@ -220,12 +232,14 @@ export class InMemorySceneStore implements SceneStore {
       createdAt: rec.createdAt,
       updatedAt: rec.updatedAt,
       ownerId: rec.ownerId,
+      workspaceId: rec.workspaceId,
       sizeBytes: rec.sizeBytes,
       nodeCount: rec.nodeCount,
       editorUrl,
       url: editorUrl,
       published: rec.published ?? true,
       graphHash: rec.graphHash ?? computeGraphHash(rec.graph),
+      command: rec.command,
     }
   }
 
@@ -241,6 +255,7 @@ export class InMemorySceneStore implements SceneStore {
       editorUrl,
       url: editorUrl,
       ownerId: scene?.ownerId ?? project?.ownerId ?? null,
+      workspaceId: scene?.workspaceId ?? project?.workspaceId ?? null,
       thumbnailUrl: scene?.thumbnailUrl ?? project?.thumbnailUrl ?? null,
       publishedVersion: scene?.version ?? null,
       latestVersion: scene?.version ?? null,

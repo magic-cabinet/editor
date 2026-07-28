@@ -23,7 +23,7 @@ import type { AnyNode, AnyNodeId } from '@pascal-app/core/schema'
 import { z } from 'zod'
 import type { SceneOperations } from '../operations'
 import { ErrorCode, throwMcpError } from './errors'
-import { appendLiveSceneEvent, publishLiveSceneSnapshot } from './live-sync'
+import { publishLiveSceneSnapshot } from './live-sync'
 
 const presentationSchema = z.enum(['hero', 'workwall', 'detail', 'plan', 'elevation', 'breakaway'])
 const paletteSchema = z.enum(['sage-oak', 'oak-white', 'midnight', 'warm-minimal'])
@@ -323,7 +323,7 @@ export function registerMagicKitchenTools(server: McpServer, operations: SceneOp
           ownerId = project.ownerId
         }
         const graph = operations.exportSceneGraph()
-        const meta = await operations.saveScene({
+        const { meta } = await operations.commitScene({
           ...(sceneId ? { id: sceneId } : {}),
           name,
           projectId,
@@ -332,15 +332,9 @@ export function registerMagicKitchenTools(server: McpServer, operations: SceneOp
           saveMode: 'draft',
           publish: false,
           operation: 'start_magic_kitchen_session',
+          eventKind: 'start_magic_kitchen_session',
         })
         operations.setActiveScene(meta)
-        await appendLiveSceneEvent(
-          operations,
-          meta.id,
-          meta.version,
-          'start_magic_kitchen_session',
-          graph,
-        )
         sceneId = meta.id
         projectId = meta.projectId
         editorUrl = meta.editorUrl ?? meta.url ?? `/scene/${meta.id}`

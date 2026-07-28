@@ -81,6 +81,7 @@ describe('create_wall', () => {
       createdAt: now,
       updatedAt: now,
       ownerId: null,
+      workspaceId: null,
       sizeBytes: 0,
       nodeCount: Object.keys(bridge.getNodes()).length,
     }
@@ -100,8 +101,12 @@ describe('create_wall', () => {
           nodeCount: Object.keys(opts.graph.nodes).length,
         }
       },
-      async load() {
-        return null
+      async load(id) {
+        if (id !== savedMeta.id) return null
+        return {
+          ...savedMeta,
+          graph: bridge.exportJSON(),
+        }
       },
       async list() {
         return []
@@ -121,6 +126,7 @@ describe('create_wall', () => {
           kind: opts.kind,
           createdAt: new Date().toISOString(),
           graph: opts.graph,
+          command: opts.command ?? null,
         }
       },
     }

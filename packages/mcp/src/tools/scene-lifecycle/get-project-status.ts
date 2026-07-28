@@ -15,6 +15,7 @@ export const getProjectStatusOutput = {
   editorUrl: z.string(),
   url: z.string(),
   ownerId: z.string().nullable(),
+  workspaceId: z.string().nullable().optional(),
   thumbnailUrl: z.string().nullable(),
   publishedVersion: z.number().nullable(),
   latestVersion: z.number().nullable(),

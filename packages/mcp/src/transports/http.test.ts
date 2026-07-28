@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SceneBridge } from '../bridge/scene-bridge'
+import type { CreationContext } from '../context'
 import { createPascalMcpServer } from '../server'
 import { connectHttp, type HttpTransportHandle, type McpServerFactory } from './http'
 
@@ -67,8 +68,124 @@ test('connectHttp isolates concurrent MCP sessions', async () => {
     const [firstTools, secondTools] = await Promise.all([first.listTools(), second.listTools()])
     expect(firstTools.tools.length).toBeGreaterThan(0)
     expect(secondTools.tools.length).toBe(firstTools.tools.length)
+
+    const firstSceneResult = await first.callTool({ name: 'get_scene', arguments: {} })
+    const firstScene = JSON.parse(
+      (firstSceneResult.content as Array<{ type: string; text: string }>)[0]!.text,
+    ) as { nodes: Record<string, { id: string; type: string }> }
+    const firstLevel = Object.values(firstScene.nodes).find((node) => node.type === 'level')!
+    const created = await first.callTool({
+      name: 'create_wall',
+      arguments: { levelId: firstLevel.id, start: [0, 0], end: [2, 0] },
+    })
+    const wallId = (
+      JSON.parse((created.content as Array<{ type: string; text: string }>)[0]!.text) as {
+        wallId: string
+      }
+    ).wallId
+    const secondSceneResult = await second.callTool({ name: 'get_scene', arguments: {} })
+    const secondScene = JSON.parse(
+      (secondSceneResult.content as Array<{ type: string; text: string }>)[0]!.text,
+    ) as { nodes: Record<string, unknown> }
+    expect(firstScene.nodes[wallId]).toBeUndefined()
+    expect(secondScene.nodes[wallId]).toBeUndefined()
+
+    const firstSceneAfter = await first.callTool({ name: 'get_scene', arguments: {} })
+    const firstAfter = JSON.parse(
+      (firstSceneAfter.content as Array<{ type: string; text: string }>)[0]!.text,
+    ) as { nodes: Record<string, unknown> }
+    expect(firstAfter.nodes[wallId]).toBeDefined()
   } finally {
     await Promise.all([first.close(), second.close()])
+  }
+})
+
+test('connectHttp creates unique sessions with trusted resolved identity', async () => {
+  const contexts: CreationContext[] = []
+  createServer = (context) => {
+    contexts.push(context)
+    const bridge = new SceneBridge()
+    bridge.loadDefault()
+    return createPascalMcpServer({ bridge, context })
+  }
+  handle = await connectHttp(createServer, 0, {
+    authToken: 'secret',
+    resolveIdentity: () => ({
+      actor: { kind: 'agent', id: 'pascal-agent' },
+      ownerId: 'user-42',
+      workspaceId: 'workspace-7',
+    }),
+  })
+  const url = new URL(`http://127.0.0.1:${handle.port}/mcp`)
+  const first = new Client({ name: 'identity-first', version: '0.0.0' })
+  const second = new Client({ name: 'identity-second', version: '0.0.0' })
+
+  try {
+    await Promise.all([
+      first.connect(
+        new StreamableHTTPClientTransport(url, {
+          requestInit: { headers: { authorization: 'Bearer secret' } },
+        }),
+      ),
+      second.connect(
+        new StreamableHTTPClientTransport(url, {
+          requestInit: { headers: { authorization: 'Bearer secret' } },
+        }),
+      ),
+    ])
+    expect(contexts).toHaveLength(2)
+    expect(contexts[0]).toMatchObject({
+      actor: { kind: 'agent', id: 'pascal-agent' },
+      ownerId: 'user-42',
+      workspaceId: 'workspace-7',
+    })
+    expect(contexts[0]!.sessionId).not.toBe(contexts[1]!.sessionId)
+  } finally {
+    await Promise.all([first.close(), second.close()])
+  }
+})
+
+test('connectHttp rejects a resumed session when the authenticated identity changes', async () => {
+  handle = await connectHttp(createServer, 0, {
+    authToken: 'secret',
+    resolveIdentity: (request) => {
+      const ownerId = String(request.headers['x-test-owner'] ?? '')
+      return {
+        actor: { kind: 'user', id: ownerId },
+        ownerId,
+        workspaceId: null,
+      }
+    },
+  })
+  const url = new URL(`http://127.0.0.1:${handle.port}/mcp`)
+  const ownerTransport = new StreamableHTTPClientTransport(url, {
+    requestInit: {
+      headers: {
+        authorization: 'Bearer secret',
+        'x-test-owner': 'user-1',
+      },
+    },
+  })
+  const owner = new Client({ name: 'owner', version: '0.0.0' })
+  await owner.connect(ownerTransport)
+
+  const intruderTransport = new StreamableHTTPClientTransport(url, {
+    sessionId: ownerTransport.sessionId,
+    requestInit: {
+      headers: {
+        authorization: 'Bearer secret',
+        'x-test-owner': 'user-2',
+      },
+    },
+  })
+  const intruder = new Client({ name: 'intruder', version: '0.0.0' })
+
+  try {
+    await intruder.connect(intruderTransport)
+    await expect(intruder.listTools()).rejects.toThrow()
+  } finally {
+    await intruder.close()
+    await owner.close()
   }
 })
 

@@ -4,11 +4,14 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
 import { z } from 'zod'
+import { type CommandEnvelope, CommandEnvelope as CommandEnvelopeSchema } from '../context'
 import { generateSlug, isValidSlug, sanitizeSlug } from './slug'
 import { openSqliteDatabase, type SqliteDatabase } from './sqlite-driver'
 import {
   type ProjectCreateOptions,
   type ProjectStatus,
+  type SceneCommitOptions,
+  type SceneCommitResult,
   type SceneEvent,
   type SceneEventAppendOptions,
   type SceneEventListOptions,
@@ -43,6 +46,7 @@ interface SceneRow {
   name: string
   project_id: string | null
   owner_id: string | null
+  workspace_id: string | null
   thumbnail_url: string | null
   version: number
   created_at: string
@@ -59,12 +63,14 @@ interface SceneEventRow {
   kind: string
   created_at: string
   graph_json: string
+  command_json: string | null
 }
 
 interface ProjectPlaceholder {
   id: string
   name: string
   ownerId: string | null
+  workspaceId: string | null
   thumbnailUrl: string | null
   createdAt: string
   updatedAt: string
@@ -135,6 +141,7 @@ function rowToMeta(row: SceneRow): SceneMeta {
     name: row.name,
     projectId: row.project_id,
     ownerId: row.owner_id,
+    workspaceId: row.workspace_id,
     thumbnailUrl: row.thumbnail_url,
     version: row.version,
     createdAt: row.created_at,
@@ -165,6 +172,7 @@ function rowToProjectStatus(row: SceneRow): ProjectStatus {
     editorUrl,
     url: editorUrl,
     ownerId: row.owner_id,
+    workspaceId: row.workspace_id,
     thumbnailUrl: row.thumbnail_url,
     publishedVersion: row.version,
     latestVersion: row.version,
@@ -189,6 +197,7 @@ function placeholderToProjectStatus(project: ProjectPlaceholder): ProjectStatus 
     editorUrl,
     url: editorUrl,
     ownerId: project.ownerId,
+    workspaceId: project.workspaceId,
     thumbnailUrl: project.thumbnailUrl,
     publishedVersion: null,
     latestVersion: null,
@@ -264,6 +273,50 @@ function rowToSceneEvent(row: SceneEventRow): SceneEvent {
     kind: row.kind,
     createdAt: row.created_at,
     graph: parseGraph(row.graph_json, `${row.scene_id}@${row.version}`),
+    command: parseCommandEnvelope(row.command_json),
+  }
+}
+
+function parseCommandEnvelope(raw: string | null): CommandEnvelope | null {
+  if (!raw) return null
+  try {
+    const result = CommandEnvelopeSchema.safeParse(JSON.parse(raw))
+    if (result.success) return result.data
+    throw new SceneInvalidError(`Stored command envelope is invalid: ${result.error.message}`)
+  } catch (error) {
+    if (error instanceof SceneInvalidError) throw error
+    throw new SceneInvalidError(
+      `Stored command envelope is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
+function normalizeCommandEnvelope(
+  command: CommandEnvelope | undefined,
+  target: {
+    operation: string
+    projectId: string | null
+    sceneId: string
+    baseRevision: number
+  },
+): CommandEnvelope | undefined {
+  if (!command) return undefined
+  const parsed = CommandEnvelopeSchema.safeParse(command)
+  if (!parsed.success) {
+    throw new SceneInvalidError(`Command envelope is invalid: ${parsed.error.message}`)
+  }
+  if (
+    parsed.data.operation !== target.operation ||
+    (parsed.data.projectId !== null && parsed.data.projectId !== target.projectId) ||
+    (parsed.data.sceneId !== null && parsed.data.sceneId !== target.sceneId) ||
+    parsed.data.baseRevision !== target.baseRevision
+  ) {
+    throw new SceneInvalidError('Command envelope target does not match the scene mutation')
+  }
+  return {
+    ...parsed.data,
+    projectId: parsed.data.projectId ?? target.projectId,
+    sceneId: parsed.data.sceneId ?? target.sceneId,
   }
 }
 
@@ -304,6 +357,7 @@ export class SqliteSceneStore implements SceneStore {
       id,
       name: opts.name,
       ownerId: opts.ownerId ?? null,
+      workspaceId: opts.workspaceId ?? null,
       thumbnailUrl: null,
       createdAt: now,
       updatedAt: now,
@@ -322,59 +376,71 @@ export class SqliteSceneStore implements SceneStore {
   }
 
   async save(opts: SceneSaveOptions): Promise<SceneMeta> {
-    return this.withWriteTransaction((db) => {
-      assertValidName(opts.name)
-      if (!opts.graph || typeof opts.graph !== 'object') {
-        throw new SceneInvalidError('graph is required')
-      }
+    return this.withWriteTransaction((db) => this.saveInTransaction(db, opts))
+  }
 
-      const providedId = opts.id
-      const id = providedId ? sanitizeSlug(providedId) : this.generateUniqueId(db)
-      if (!isValidSlug(id)) {
-        throw new SceneInvalidError(`Invalid scene id after sanitization: "${id}"`)
-      }
+  private saveInTransaction(db: SqliteDatabase, opts: SceneSaveOptions): SceneMeta {
+    assertValidName(opts.name)
+    if (!opts.graph || typeof opts.graph !== 'object') {
+      throw new SceneInvalidError('graph is required')
+    }
 
-      const existing = this.getRow(db, id)
-      const placeholder = this.projectPlaceholders.get(id)
+    const providedId = opts.id
+    const id = providedId ? sanitizeSlug(providedId) : this.generateUniqueId(db)
+    if (!isValidSlug(id)) {
+      throw new SceneInvalidError(`Invalid scene id after sanitization: "${id}"`)
+    }
 
-      if (existing && providedId !== undefined && opts.expectedVersion === undefined) {
-        throw new SceneInvalidError(
-          `Scene with id "${id}" already exists. Pass a different id or provide expectedVersion to overwrite.`,
+    const existing = this.getRow(db, id)
+    const placeholder = this.projectPlaceholders.get(id)
+
+    if (existing && providedId !== undefined && opts.expectedVersion === undefined) {
+      throw new SceneInvalidError(
+        `Scene with id "${id}" already exists. Pass a different id or provide expectedVersion to overwrite.`,
+      )
+    }
+
+    if (opts.expectedVersion !== undefined) {
+      const currentVersion = existing?.version ?? 0
+      if (currentVersion !== opts.expectedVersion) {
+        throw new SceneVersionConflictError(
+          `Scene "${id}" version mismatch: expected ${opts.expectedVersion}, got ${currentVersion}`,
         )
       }
+    }
 
-      if (opts.expectedVersion !== undefined) {
-        const currentVersion = existing?.version ?? 0
-        if (currentVersion !== opts.expectedVersion) {
-          throw new SceneVersionConflictError(
-            `Scene "${id}" version mismatch: expected ${opts.expectedVersion}, got ${currentVersion}`,
-          )
-        }
-      }
+    const graphJson = serializeGraph(opts.graph)
+    const sizeBytes = Buffer.byteLength(graphJson, 'utf8')
+    if (sizeBytes > this.maxSceneBytes) {
+      throw new SceneTooLargeError(
+        `Scene "${id}" is ${sizeBytes} bytes, exceeds cap of ${this.maxSceneBytes} bytes`,
+      )
+    }
 
-      const graphJson = serializeGraph(opts.graph)
-      const sizeBytes = Buffer.byteLength(graphJson, 'utf8')
-      if (sizeBytes > this.maxSceneBytes) {
-        throw new SceneTooLargeError(
-          `Scene "${id}" is ${sizeBytes} bytes, exceeds cap of ${this.maxSceneBytes} bytes`,
-        )
-      }
+    const now = new Date().toISOString()
+    const version = (existing?.version ?? 0) + 1
+    const createdAt = existing?.created_at ?? placeholder?.createdAt ?? now
+    const nodeCount = Object.keys(opts.graph.nodes ?? {}).length
+    const projectId = opts.projectId ?? existing?.project_id ?? (placeholder ? id : null)
+    const ownerId = opts.ownerId ?? existing?.owner_id ?? placeholder?.ownerId ?? null
+    const workspaceId =
+      opts.workspaceId ?? existing?.workspace_id ?? placeholder?.workspaceId ?? null
+    const command = normalizeCommandEnvelope(opts.command, {
+      operation: opts.operation ?? 'save_scene',
+      projectId,
+      sceneId: id,
+      baseRevision: existing?.version ?? 0,
+    })
+    const thumbnailUrl =
+      opts.thumbnailUrl ?? existing?.thumbnail_url ?? placeholder?.thumbnailUrl ?? null
 
-      const now = new Date().toISOString()
-      const version = (existing?.version ?? 0) + 1
-      const createdAt = existing?.created_at ?? placeholder?.createdAt ?? now
-      const nodeCount = Object.keys(opts.graph.nodes ?? {}).length
-      const projectId = opts.projectId ?? existing?.project_id ?? (placeholder ? id : null)
-      const ownerId = opts.ownerId ?? existing?.owner_id ?? placeholder?.ownerId ?? null
-      const thumbnailUrl =
-        opts.thumbnailUrl ?? existing?.thumbnail_url ?? placeholder?.thumbnailUrl ?? null
-
-      if (existing) {
-        db.query(
-          `UPDATE scenes
+    if (existing) {
+      db.query(
+        `UPDATE scenes
              SET name = ?,
                  project_id = ?,
                  owner_id = ?,
+                 workspace_id = ?,
                  thumbnail_url = ?,
                  version = ?,
                  updated_at = ?,
@@ -382,64 +448,76 @@ export class SqliteSceneStore implements SceneStore {
                  node_count = ?,
                  graph_json = ?
            WHERE id = ?`,
-        ).run(
-          opts.name,
-          projectId,
-          ownerId,
-          thumbnailUrl,
-          version,
-          now,
-          sizeBytes,
-          nodeCount,
-          graphJson,
-          id,
-        )
-      } else {
-        db.query(
-          `INSERT INTO scenes (
-             id, name, project_id, owner_id, thumbnail_url, version,
-             created_at, updated_at, size_bytes, node_count, graph_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id,
-          opts.name,
-          projectId,
-          ownerId,
-          thumbnailUrl,
-          version,
-          createdAt,
-          now,
-          sizeBytes,
-          nodeCount,
-          graphJson,
-        )
-      }
-
-      db.query(
-        `INSERT INTO scene_revisions (
-           scene_id, version, graph_json, author_kind, author_id, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(id, version, graphJson, 'mcp', ownerId, now)
-
-      this.projectPlaceholders.delete(id)
-
-      return {
-        id,
-        name: opts.name,
+      ).run(
+        opts.name,
         projectId,
         ownerId,
+        workspaceId,
+        thumbnailUrl,
+        version,
+        now,
+        sizeBytes,
+        nodeCount,
+        graphJson,
+        id,
+      )
+    } else {
+      db.query(
+        `INSERT INTO scenes (
+             id, name, project_id, owner_id, workspace_id, thumbnail_url, version,
+             created_at, updated_at, size_bytes, node_count, graph_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        opts.name,
+        projectId,
+        ownerId,
+        workspaceId,
         thumbnailUrl,
         version,
         createdAt,
-        updatedAt: now,
+        now,
         sizeBytes,
         nodeCount,
-        editorUrl: editorUrlForScene(id),
-        url: editorUrlForScene(id),
-        published: true,
-        graphHash: hashGraphJson(graphJson),
-      }
-    })
+        graphJson,
+      )
+    }
+
+    db.query(
+      `INSERT INTO scene_revisions (
+           scene_id, version, graph_json, author_kind, author_id, created_at, command_id, command_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      version,
+      graphJson,
+      command?.actor.kind ?? 'mcp',
+      command?.actor.id ?? ownerId,
+      now,
+      command?.commandId ?? null,
+      command ? JSON.stringify(command) : null,
+    )
+
+    this.projectPlaceholders.delete(id)
+
+    return {
+      id,
+      name: opts.name,
+      projectId,
+      ownerId,
+      workspaceId,
+      thumbnailUrl,
+      version,
+      createdAt,
+      updatedAt: now,
+      sizeBytes,
+      nodeCount,
+      editorUrl: editorUrlForScene(id),
+      url: editorUrlForScene(id),
+      published: true,
+      graphHash: hashGraphJson(graphJson),
+      ...(command ? { command } : {}),
+    }
   }
 
   async load(id: string): Promise<SceneWithGraph | null> {
@@ -464,6 +542,10 @@ export class SqliteSceneStore implements SceneStore {
       clauses.push('owner_id = ?')
       bindings.push(opts.ownerId)
     }
+    if (opts.workspaceId !== undefined) {
+      clauses.push('workspace_id = ?')
+      bindings.push(opts.workspaceId)
+    }
 
     const requestedLimit = opts.limit ?? DEFAULT_LIST_LIMIT
     const limit = Number.isInteger(requestedLimit) && requestedLimit >= 0 ? requestedLimit : 0
@@ -473,7 +555,7 @@ export class SqliteSceneStore implements SceneStore {
     const db = await this.database()
     const rows = db
       .query(
-        `SELECT id, name, project_id, owner_id, thumbnail_url, version,
+        `SELECT id, name, project_id, owner_id, workspace_id, thumbnail_url, version,
                 created_at, updated_at, size_bytes, node_count, graph_json
            FROM scenes
            ${where}
@@ -516,6 +598,12 @@ export class SqliteSceneStore implements SceneStore {
 
       const now = new Date().toISOString()
       const nextVersion = existing.version + 1
+      const command = normalizeCommandEnvelope(opts.command, {
+        operation: 'rename_scene',
+        projectId: existing.project_id,
+        sceneId: safeId,
+        baseRevision: existing.version,
+      })
       db.query('UPDATE scenes SET name = ?, version = ?, updated_at = ? WHERE id = ?').run(
         newName,
         nextVersion,
@@ -525,45 +613,89 @@ export class SqliteSceneStore implements SceneStore {
 
       db.query(
         `INSERT INTO scene_revisions (
-             scene_id, version, graph_json, author_kind, author_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(safeId, nextVersion, existing.graph_json, 'mcp', existing.owner_id, now)
+             scene_id, version, graph_json, author_kind, author_id, created_at, command_id, command_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        safeId,
+        nextVersion,
+        existing.graph_json,
+        command?.actor.kind ?? 'mcp',
+        command?.actor.id ?? existing.owner_id,
+        now,
+        command?.commandId ?? null,
+        command ? JSON.stringify(command) : null,
+      )
 
       return {
         ...rowToMeta(existing),
         name: newName,
         version: nextVersion,
         updatedAt: now,
+        ...(command ? { command } : {}),
       }
     })
   }
 
   async appendSceneEvent(opts: SceneEventAppendOptions): Promise<SceneEvent> {
+    return this.withWriteTransaction((db) => this.appendSceneEventInTransaction(db, opts))
+  }
+
+  private appendSceneEventInTransaction(
+    db: SqliteDatabase,
+    opts: SceneEventAppendOptions,
+  ): SceneEvent {
+    const safeId = sanitizeSlug(opts.sceneId)
+    const existing = this.getRow(db, safeId)
+    if (!existing) {
+      throw new SceneNotFoundError(`Scene "${safeId}" not found`)
+    }
+
+    const graphJson = serializeGraph(opts.graph)
+    const now = new Date().toISOString()
+    const command = normalizeCommandEnvelope(opts.command, {
+      operation: opts.kind,
+      projectId: existing.project_id,
+      sceneId: safeId,
+      baseRevision: Math.max(0, opts.version - 1),
+    })
+    const result = db
+      .query(
+        `INSERT INTO scene_events (
+             scene_id, version, kind, created_at, graph_json, command_id, command_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        safeId,
+        opts.version,
+        opts.kind,
+        now,
+        graphJson,
+        command?.commandId ?? null,
+        command ? JSON.stringify(command) : null,
+      )
+
+    return {
+      eventId: Number(result.lastInsertRowid),
+      sceneId: safeId,
+      version: opts.version,
+      kind: opts.kind,
+      createdAt: now,
+      graph: opts.graph,
+      command: command ?? null,
+    }
+  }
+
+  async commitScene(opts: SceneCommitOptions): Promise<SceneCommitResult> {
     return this.withWriteTransaction((db) => {
-      const safeId = sanitizeSlug(opts.sceneId)
-      const existing = this.getRow(db, safeId)
-      if (!existing) {
-        throw new SceneNotFoundError(`Scene "${safeId}" not found`)
-      }
-
-      const graphJson = serializeGraph(opts.graph)
-      const now = new Date().toISOString()
-      const result = db
-        .query(
-          `INSERT INTO scene_events (
-             scene_id, version, kind, created_at, graph_json
-           ) VALUES (?, ?, ?, ?, ?)`,
-        )
-        .run(safeId, opts.version, opts.kind, now, graphJson)
-
-      return {
-        eventId: Number(result.lastInsertRowid),
-        sceneId: safeId,
-        version: opts.version,
-        kind: opts.kind,
-        createdAt: now,
+      const meta = this.saveInTransaction(db, opts)
+      const event = this.appendSceneEventInTransaction(db, {
+        sceneId: meta.id,
+        version: meta.version,
+        kind: opts.eventKind,
         graph: opts.graph,
-      }
+        command: meta.command ?? opts.command,
+      })
+      return { meta, event }
     })
   }
 
@@ -574,7 +706,7 @@ export class SqliteSceneStore implements SceneStore {
     const db = await this.database()
     const rows = db
       .query(
-        `SELECT event_id, scene_id, version, kind, created_at, graph_json
+        `SELECT event_id, scene_id, version, kind, created_at, graph_json, command_json
            FROM scene_events
           WHERE scene_id = ?
             AND event_id > ?
@@ -616,6 +748,7 @@ export class SqliteSceneStore implements SceneStore {
         name TEXT NOT NULL CHECK (length(name) >= 1 AND length(name) <= 200),
         project_id TEXT,
         owner_id TEXT,
+        workspace_id TEXT,
         thumbnail_url TEXT,
         version INTEGER NOT NULL CHECK (version >= 1),
         created_at TEXT NOT NULL,
@@ -638,6 +771,8 @@ export class SqliteSceneStore implements SceneStore {
         author_kind TEXT NOT NULL,
         author_id TEXT,
         created_at TEXT NOT NULL,
+        command_id TEXT,
+        command_json TEXT,
         PRIMARY KEY (scene_id, version),
         FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE
       );
@@ -649,11 +784,29 @@ export class SqliteSceneStore implements SceneStore {
         kind TEXT NOT NULL,
         created_at TEXT NOT NULL,
         graph_json TEXT NOT NULL,
+        command_id TEXT,
+        command_json TEXT,
         FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS scene_events_scene_event_idx
         ON scene_events(scene_id, event_id);
+    `)
+
+    this.ensureColumn(db, 'scenes', 'workspace_id', 'TEXT')
+    this.ensureColumn(db, 'scene_revisions', 'command_id', 'TEXT')
+    this.ensureColumn(db, 'scene_revisions', 'command_json', 'TEXT')
+    this.ensureColumn(db, 'scene_events', 'command_id', 'TEXT')
+    this.ensureColumn(db, 'scene_events', 'command_json', 'TEXT')
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS scenes_workspace_updated_idx
+        ON scenes(workspace_id, updated_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS scene_revisions_command_idx
+        ON scene_revisions(scene_id, command_id)
+        WHERE command_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS scene_events_command_idx
+        ON scene_events(scene_id, command_id)
+        WHERE command_id IS NOT NULL;
     `)
   }
 
@@ -678,13 +831,24 @@ export class SqliteSceneStore implements SceneStore {
     return asSceneRow(
       db
         .query(
-          `SELECT id, name, project_id, owner_id, thumbnail_url, version,
+          `SELECT id, name, project_id, owner_id, workspace_id, thumbnail_url, version,
                   created_at, updated_at, size_bytes, node_count, graph_json
              FROM scenes
             WHERE id = ?`,
         )
         .get(id),
     )
+  }
+
+  private ensureColumn(
+    db: SqliteDatabase,
+    table: 'scenes' | 'scene_revisions' | 'scene_events',
+    column: string,
+    definition: string,
+  ): void {
+    const columns = db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    if (columns.some((entry) => entry.name === column)) return
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
   }
 
   private generateUniqueId(db: SqliteDatabase): string {

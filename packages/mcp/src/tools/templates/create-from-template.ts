@@ -6,7 +6,6 @@ import { rehydrateSiteChildren } from '../../lib/rehydrate-site-children'
 import type { SceneOperations } from '../../operations'
 import { isTemplateId, TEMPLATES, type TemplateId } from '../../templates'
 import { ErrorCode, throwMcpError } from '../errors'
-import { appendLiveSceneEvent } from '../live-sync'
 import { currentLevelContext, sceneMetaPayload } from '../scene-lifecycle/metadata'
 
 export const createFromTemplateInput = {
@@ -134,19 +133,16 @@ export function registerCreateFromTemplate(server: McpServer, bridge: SceneOpera
           const project = await bridge.createProject({ name: name ?? entry.name })
           saveProjectId = project.projectId
         }
-        const meta = await bridge.saveScene({
+        const { meta } = await bridge.commitScene({
           ...(saveProjectId !== undefined ? { id: saveProjectId, projectId: saveProjectId } : {}),
           name: name ?? entry.name,
           graph: { nodes, rootNodeIds },
           saveMode: 'draft',
           publish: false,
           operation: 'create_from_template',
+          eventKind: 'create_from_template',
         })
         bridge.setActiveScene(meta)
-        await appendLiveSceneEvent(bridge, meta.id, meta.version, 'create_from_template', {
-          nodes,
-          rootNodeIds,
-        })
         const scene = {
           ...sceneMetaPayload(meta, { nodes, rootNodeIds }),
           ...currentLevelContext(bridge),

@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
+import { createCommandEnvelope } from '../context'
 import {
   resolveDefaultDatabasePath,
   SqliteSceneStore,
@@ -120,12 +121,14 @@ describe('SqliteSceneStore', () => {
       graph: makeGraph(),
       projectId: 'proj-1',
       ownerId: 'user-42',
+      workspaceId: 'workspace-7',
       thumbnailUrl: 'https://example.com/t.png',
     })
 
     const loaded = await store.load('meta-test')
     expect(loaded?.projectId).toBe('proj-1')
     expect(loaded?.ownerId).toBe('user-42')
+    expect(loaded?.workspaceId).toBe('workspace-7')
     expect(loaded?.thumbnailUrl).toBe('https://example.com/t.png')
   })
 
@@ -228,12 +231,33 @@ describe('SqliteSceneStore', () => {
 
   test('appends and lists scene events in order', async () => {
     const graph = makeGraph()
-    const meta = await store.save({ id: 'live', name: 'Live', graph })
+    const context = {
+      actor: { kind: 'agent' as const, id: 'agent-1' },
+      ownerId: 'user-1',
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      source: 'mcp' as const,
+    }
+    const command = createCommandEnvelope(context, 'save_scene', {
+      projectId: 'project-1',
+      sceneId: 'live',
+      baseRevision: 0,
+    })
+    const meta = await store.save({
+      id: 'live',
+      name: 'Live',
+      graph,
+      ownerId: 'user-1',
+      workspaceId: 'workspace-1',
+      projectId: 'project-1',
+      command,
+    })
     const first = await store.appendSceneEvent({
       sceneId: meta.id,
       version: meta.version,
       kind: 'save_scene',
       graph,
+      command,
     })
     const updatedGraph = makeGraph({
       nodes: {
@@ -271,6 +295,173 @@ describe('SqliteSceneStore', () => {
     expect(afterFirst).toHaveLength(1)
     expect(afterFirst[0]!.eventId).toBe(second.eventId)
     expect(afterFirst[0]!.graph.nodes.wall_new).toBeDefined()
+    expect((await store.listSceneEvents('live'))[0]!.command).toEqual(command)
+  })
+
+  test('adds identity and command columns to an existing database', async () => {
+    store.close()
+    const dbPath = path.join(rootDir, 'pascal.db')
+    const db = new Database(dbPath, { create: true })
+    try {
+      db.exec(`
+        CREATE TABLE scenes (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          project_id TEXT,
+          owner_id TEXT,
+          thumbnail_url TEXT,
+          version INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          size_bytes INTEGER NOT NULL,
+          node_count INTEGER NOT NULL,
+          graph_json TEXT NOT NULL
+        );
+        CREATE TABLE scene_revisions (
+          scene_id TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          graph_json TEXT NOT NULL,
+          author_kind TEXT NOT NULL,
+          author_id TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (scene_id, version)
+        );
+        CREATE TABLE scene_events (
+          event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          scene_id TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          graph_json TEXT NOT NULL
+        );
+      `)
+    } finally {
+      db.close()
+    }
+
+    store = createStore(rootDir)
+    await store.list()
+
+    const migrated = new Database(dbPath)
+    try {
+      const columnNames = (table: string) =>
+        (migrated.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+          (entry) => entry.name,
+        )
+      expect(columnNames('scenes')).toContain('workspace_id')
+      expect(columnNames('scene_revisions')).toContain('command_id')
+      expect(columnNames('scene_revisions')).toContain('command_json')
+      expect(columnNames('scene_events')).toContain('command_id')
+      expect(columnNames('scene_events')).toContain('command_json')
+    } finally {
+      migrated.close()
+    }
+  })
+
+  test('atomically commits a revision and matching live event', async () => {
+    const context = {
+      actor: { kind: 'agent' as const, id: 'agent-1' },
+      ownerId: 'user-1',
+      workspaceId: 'workspace-1',
+      sessionId: 'session-1',
+      source: 'mcp' as const,
+    }
+    const command = createCommandEnvelope(context, 'create_scene', {
+      projectId: 'project-1',
+      sceneId: 'atomic',
+      baseRevision: 0,
+    })
+    const result = await store.commitScene({
+      id: 'atomic',
+      name: 'Atomic',
+      projectId: 'project-1',
+      ownerId: 'user-1',
+      workspaceId: 'workspace-1',
+      graph: makeGraph(),
+      operation: 'create_scene',
+      eventKind: 'create_scene',
+      command,
+    })
+
+    expect(result.meta.command?.commandId).toBe(command.commandId)
+    expect(result.event.command?.commandId).toBe(command.commandId)
+    expect(await store.listSceneEvents('atomic')).toHaveLength(1)
+  })
+
+  test('rolls back the scene revision when atomic event publication fails', async () => {
+    const context = {
+      actor: { kind: 'agent' as const, id: 'agent-1' },
+      ownerId: 'user-1',
+      workspaceId: null,
+      sessionId: 'session-1',
+      source: 'mcp' as const,
+    }
+    const command = createCommandEnvelope(context, 'save_scene', {
+      sceneId: 'rollback',
+      baseRevision: 0,
+    })
+
+    await expect(
+      store.commitScene({
+        id: 'rollback',
+        name: 'Rollback',
+        graph: makeGraph(),
+        operation: 'save_scene',
+        eventKind: 'different_operation',
+        command,
+      }),
+    ).rejects.toThrow(SceneInvalidError)
+    expect(await store.load('rollback')).toBeNull()
+  })
+
+  test('rejects a command operation that does not match the requested save', async () => {
+    const command = createCommandEnvelope(
+      {
+        actor: { kind: 'agent', id: 'agent-1' },
+        ownerId: 'user-1',
+        workspaceId: null,
+        sessionId: 'session-1',
+        source: 'mcp',
+      },
+      'rename_scene',
+      {
+        sceneId: 'wrong-operation',
+        baseRevision: 0,
+      },
+    )
+
+    await expect(
+      store.save({
+        id: 'wrong-operation',
+        name: 'Wrong operation',
+        graph: makeGraph(),
+        command,
+      }),
+    ).rejects.toThrow(SceneInvalidError)
+    expect(await store.load('wrong-operation')).toBeNull()
+  })
+
+  test('rejects corrupted non-null command provenance but accepts legacy null provenance', async () => {
+    const graph = makeGraph()
+    const meta = await store.save({ id: 'legacy-event', name: 'Legacy', graph })
+    await store.appendSceneEvent({
+      sceneId: meta.id,
+      version: meta.version,
+      kind: 'legacy',
+      graph,
+    })
+    expect((await store.listSceneEvents(meta.id))[0]!.command).toBeNull()
+
+    const db = new Database(path.join(rootDir, 'pascal.db'))
+    try {
+      db.query('UPDATE scene_events SET command_json = ? WHERE scene_id = ?').run(
+        '{"broken":true}',
+        meta.id,
+      )
+    } finally {
+      db.close()
+    }
+    await expect(store.listSceneEvents(meta.id)).rejects.toThrow(SceneInvalidError)
   })
 
   test('validates name and scene size', async () => {

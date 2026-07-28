@@ -19,8 +19,6 @@ describe('SceneBridge', () => {
 
   beforeEach(() => {
     bridge = new SceneBridge()
-    // Ensure a clean slate even if a prior test left store state around
-    // (the core store is a module-singleton).
     bridge.setScene({}, [])
     bridge.clearHistory()
     bridge.loadDefault()
@@ -29,6 +27,19 @@ describe('SceneBridge', () => {
   })
 
   describe('loadDefault / getters', () => {
+    test('isolates graph and history state between bridge instances', () => {
+      const other = new SceneBridge()
+      other.loadDefault()
+      const otherLevel = other.findNodes({ type: 'level' })[0]!
+      const wall = WallNode.parse({ start: [0, 0], end: [2, 0] })
+      other.createNode(wall, otherLevel.id)
+
+      expect(other.getNode(wall.id)).not.toBeNull()
+      expect(bridge.getNode(wall.id)).toBeNull()
+      expect(other.getHistory().pastCount).toBeGreaterThan(0)
+      expect(bridge.getHistory().pastCount).toBe(0)
+    })
+
     test('creates default Site → Building → Level', () => {
       const nodes = bridge.getNodes()
       const types = Object.values(nodes)

@@ -233,12 +233,14 @@ export {
   applyScenePatch,
   applySceneSnapshot,
   clearSceneHistory,
+  createSceneStore,
   default as useScene,
   type SceneMaterialPatch,
   type SceneNodePatch,
   type SceneNodeStructuralPatch,
   type SceneOperationPatch,
   type ScenePatch,
+  type UseSceneStore,
 } from './store/use-scene'
 export { resolveElevatorDispatchTarget } from './systems/elevator/elevator-dispatch'
 export {

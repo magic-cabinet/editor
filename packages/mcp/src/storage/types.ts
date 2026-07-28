@@ -1,4 +1,5 @@
 import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
+import type { CommandEnvelope } from '../context'
 
 /**
  * Slug-safe scene identifier: lowercase alphanumerics and hyphens, ≤ 64 chars.
@@ -17,6 +18,7 @@ export interface SceneMeta {
   /** ISO 8601 timestamp. */
   updatedAt: string
   ownerId: string | null
+  workspaceId?: string | null
   sizeBytes: number
   nodeCount: number
   /** Browser route agents should return to users. Hosted apps should prefer /scene/<projectId>. */
@@ -31,6 +33,8 @@ export interface SceneMeta {
   saveMode?: SceneSaveMode
   /** Stable hash of the graph payload used for save/load/status matching. */
   graphHash?: string
+  /** Command persisted with this save. Present on immediate mutation results. */
+  command?: CommandEnvelope
 }
 
 export interface SceneWithGraph extends SceneMeta {
@@ -44,6 +48,7 @@ export interface SceneEvent {
   kind: string
   createdAt: string
   graph: SceneGraph
+  command?: CommandEnvelope | null
 }
 
 export interface SceneSaveOptions {
@@ -51,6 +56,7 @@ export interface SceneSaveOptions {
   name: string
   projectId?: string | null
   ownerId?: string | null
+  workspaceId?: string | null
   graph: SceneGraph
   thumbnailUrl?: string | null
   /** When set, save fails with `SceneVersionConflictError` on mismatch. */
@@ -63,6 +69,8 @@ export interface SceneSaveOptions {
   agentSessionId?: string
   /** Optional high-level operation name for presence/debug metadata. */
   operation?: string
+  /** Authenticated command provenance. MCP operations attach this automatically. */
+  command?: CommandEnvelope
 }
 
 export type SceneSaveMode = 'draft' | 'checkpoint'
@@ -70,11 +78,13 @@ export type SceneSaveMode = 'draft' | 'checkpoint'
 export interface SceneListOptions {
   projectId?: string
   ownerId?: string
+  workspaceId?: string
   limit?: number
 }
 
 export interface SceneMutateOptions {
   expectedVersion?: number
+  command?: CommandEnvelope
 }
 
 export interface SceneEventAppendOptions {
@@ -82,6 +92,7 @@ export interface SceneEventAppendOptions {
   version: number
   kind: string
   graph: SceneGraph
+  command?: CommandEnvelope
 }
 
 export interface SceneEventListOptions {
@@ -89,10 +100,20 @@ export interface SceneEventListOptions {
   limit?: number
 }
 
+export interface SceneCommitOptions extends SceneSaveOptions {
+  eventKind: string
+}
+
+export interface SceneCommitResult {
+  meta: SceneMeta
+  event: SceneEvent
+}
+
 export interface ProjectCreateOptions {
   id?: SceneId
   name: string
   ownerId?: string | null
+  workspaceId?: string | null
   isPrivate?: boolean
 }
 
@@ -103,6 +124,7 @@ export interface ProjectStatus {
   editorUrl: string
   url: string
   ownerId: string | null
+  workspaceId?: string | null
   thumbnailUrl: string | null
   publishedVersion: number | null
   latestVersion: number | null
@@ -123,6 +145,7 @@ export interface SceneStore {
   createProject?(opts: ProjectCreateOptions): Promise<ProjectStatus>
   getProjectStatus?(id: SceneId): Promise<ProjectStatus | null>
   save(opts: SceneSaveOptions): Promise<SceneMeta>
+  commitScene?(opts: SceneCommitOptions): Promise<SceneCommitResult>
   load(id: SceneId): Promise<SceneWithGraph | null>
   list(opts?: SceneListOptions): Promise<SceneMeta[]>
   delete(id: SceneId, opts?: SceneMutateOptions): Promise<boolean>
@@ -160,5 +183,13 @@ export class SceneTooLargeError extends Error {
   constructor(message = 'Scene too large') {
     super(message)
     this.name = 'SceneTooLargeError'
+  }
+}
+
+export class SceneAccessDeniedError extends Error {
+  readonly code = 'forbidden' as const
+  constructor(message = 'Scene access denied') {
+    super(message)
+    this.name = 'SceneAccessDeniedError'
   }
 }

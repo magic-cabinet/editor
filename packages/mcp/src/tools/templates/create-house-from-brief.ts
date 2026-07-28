@@ -6,7 +6,6 @@ import { rehydrateSiteChildren } from '../../lib/rehydrate-site-children'
 import type { SceneOperations } from '../../operations'
 import { isTemplateId, TEMPLATES, type TemplateId } from '../../templates'
 import { ErrorCode, throwMcpError } from '../errors'
-import { appendLiveSceneEvent } from '../live-sync'
 import { currentLevelContext, sceneMetaPayload } from '../scene-lifecycle/metadata'
 
 export const createHouseFromBriefInput = {
@@ -166,19 +165,16 @@ export function registerCreateHouseFromBrief(server: McpServer, bridge: SceneOpe
           saveProjectId = project.projectId
         }
 
-        const meta = await bridge.saveScene({
+        const { meta } = await bridge.commitScene({
           ...(saveProjectId !== undefined ? { id: saveProjectId, projectId: saveProjectId } : {}),
           name: projectName ?? entry.name,
           graph: { nodes, rootNodeIds },
           saveMode: 'draft',
           publish: false,
           operation: 'create_house_from_brief',
+          eventKind: 'create_house_from_brief',
         })
         bridge.setActiveScene(meta)
-        await appendLiveSceneEvent(bridge, meta.id, meta.version, 'create_house_from_brief', {
-          nodes,
-          rootNodeIds,
-        })
         const scene = sceneMetaPayload(meta, { nodes, rootNodeIds })
         const payload = {
           projectId: scene.projectId ?? scene.id,

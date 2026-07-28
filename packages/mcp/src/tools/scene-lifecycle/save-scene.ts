@@ -5,7 +5,6 @@ import { z } from 'zod'
 import type { SceneOperations } from '../../operations'
 import { SceneVersionConflictError } from '../../storage/types'
 import { ErrorCode, throwMcpError } from '../errors'
-import { appendLiveSceneEvent } from '../live-sync'
 import { currentLevelContext, sceneMetaPayload } from './metadata'
 
 export const saveSceneInput = {
@@ -45,6 +44,7 @@ export const saveSceneOutput = {
   createdAt: z.string(),
   updatedAt: z.string(),
   ownerId: z.string().nullable(),
+  workspaceId: z.string().nullable().optional(),
   sizeBytes: z.number(),
   nodeCount: z.number(),
   url: z.string(),
@@ -119,7 +119,7 @@ export function registerSaveScene(server: McpServer, bridge: SceneOperations): v
       }
 
       try {
-        const meta = await bridge.saveScene({
+        const { meta } = await bridge.commitScene({
           ...(id !== undefined ? { id } : {}),
           name,
           ...(projectId !== undefined ? { projectId } : {}),
@@ -129,8 +129,8 @@ export function registerSaveScene(server: McpServer, bridge: SceneOperations): v
           saveMode,
           ...(publish !== undefined ? { publish } : {}),
           operation: 'save_scene',
+          eventKind: 'save_scene',
         })
-        await appendLiveSceneEvent(bridge, meta.id, meta.version, 'save_scene', sceneGraph)
         if (includeCurrentScene) {
           bridge.setActiveScene(meta)
         }

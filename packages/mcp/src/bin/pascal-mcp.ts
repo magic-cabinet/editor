@@ -5,6 +5,7 @@ import '../bridge/node-shims'
 import { readFileSync } from 'node:fs'
 import { parseArgs } from 'node:util'
 import { SceneBridge } from '../bridge/scene-bridge'
+import { type CreationContext, createLocalCreationContext } from '../context'
 import { version } from '../index'
 import { createPascalMcpServer } from '../server'
 import { createSceneStore } from '../storage'
@@ -55,14 +56,14 @@ async function main(): Promise<void> {
 
   const initialScene = values.scene ? readFileSync(values.scene, 'utf8') : null
   const store = await createSceneStore()
-  const createServer = () => {
+  const createServer = (context: CreationContext) => {
     const bridge = new SceneBridge()
     if (initialScene) {
       bridge.loadJSON(initialScene)
     } else {
       bridge.loadDefault()
     }
-    return createPascalMcpServer({ bridge, store })
+    return createPascalMcpServer({ bridge, store, context })
   }
 
   if (values.http) {
@@ -87,7 +88,7 @@ async function main(): Promise<void> {
     process.on('SIGTERM', shutdown)
   } else {
     // --stdio is the default when no transport flag is passed.
-    const server = createServer()
+    const server = createServer(createLocalCreationContext(undefined, 'cli'))
     await connectStdio(server)
     console.error('[pascal-mcp] stdio server running')
   }

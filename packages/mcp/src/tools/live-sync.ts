@@ -1,4 +1,3 @@
-import type { SceneGraph } from '@pascal-app/core/clone-scene-graph'
 import { syncAutoStairOpenings } from '@pascal-app/core/stair-openings'
 import type { SceneOperations } from '../operations'
 import { SceneVersionConflictError } from '../storage/types'
@@ -32,9 +31,14 @@ export async function publishLiveSceneSnapshot(
   if (!(active && operations.canAppendSceneEvents)) return
 
   const graph = operations.exportSceneGraph()
+  const command = operations.commandEnvelope(kind, {
+    projectId: active.projectId,
+    sceneId: active.id,
+    baseRevision: active.version,
+  })
 
   try {
-    const meta = await operations.saveScene({
+    const { meta } = await operations.commitScene({
       id: active.id,
       name: active.name,
       projectId: active.projectId,
@@ -45,14 +49,10 @@ export async function publishLiveSceneSnapshot(
       saveMode: 'draft',
       publish: false,
       operation: kind,
+      command,
+      eventKind: kind,
     })
     operations.setActiveScene(meta)
-    await operations.appendSceneEvent({
-      sceneId: meta.id,
-      version: meta.version,
-      kind,
-      graph,
-    })
   } catch (error) {
     if (error instanceof SceneVersionConflictError) {
       throwMcpError(ErrorCode.InvalidRequest, 'live_sync_version_conflict', {
@@ -63,15 +63,4 @@ export async function publishLiveSceneSnapshot(
     const message = error instanceof Error ? error.message : String(error)
     throwMcpError(ErrorCode.InternalError, `live_sync_failed: ${message}`)
   }
-}
-
-export async function appendLiveSceneEvent(
-  operations: SceneOperations,
-  sceneId: string,
-  version: number,
-  kind: string,
-  graph: SceneGraph,
-): Promise<void> {
-  if (!operations.canAppendSceneEvents) return
-  await operations.appendSceneEvent({ sceneId, version, kind, graph })
 }

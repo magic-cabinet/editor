@@ -19,6 +19,7 @@ export const renameSceneOutput = {
   createdAt: z.string(),
   updatedAt: z.string(),
   ownerId: z.string().nullable(),
+  workspaceId: z.string().nullable().optional(),
   sizeBytes: z.number(),
   nodeCount: z.number(),
 }
@@ -47,6 +48,7 @@ export function registerRenameScene(server: McpServer, operations: SceneOperatio
           createdAt: meta.createdAt,
           updatedAt: meta.updatedAt,
           ownerId: meta.ownerId,
+          workspaceId: meta.workspaceId,
           sizeBytes: meta.sizeBytes,
           nodeCount: meta.nodeCount,
         }

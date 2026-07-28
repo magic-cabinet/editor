@@ -59,6 +59,24 @@ share a different directory, or `PASCAL_DB_PATH` when you need an exact database
 file path. The store uses WAL mode and transactional version checks so separate
 local processes can save and open the same scene database.
 
+## Identity and session isolation
+
+Every MCP connection receives an immutable creation context containing the
+actor, owner, workspace, session, and source. Persisted scene saves derive a
+command envelope from that context. Live snapshot saves record the matching
+revision and event in one SQLite transaction.
+
+HTTP sessions also own independent scene stores. A graph loaded or edited in
+one session is not visible in another session unless both explicitly load the
+same persisted scene. Hosted HTTP adapters should provide `resolveIdentity` to
+derive `actor`, `ownerId`, and `workspaceId` from trusted authentication
+middleware; resumed requests are rejected if that identity changes.
+
+Loopback HTTP without a token uses a local, unscoped identity.
+Token-authenticated HTTP uses a deterministic service identity. Workspace
+identities can access only their exact workspace; personal identities can
+access only their exact owner scope.
+
 During workspace development, run both sides with the same data directory:
 
 ```bash
