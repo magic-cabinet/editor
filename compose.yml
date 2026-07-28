@@ -2,10 +2,12 @@ name: magic-cabinet-dev
 
 services:
   showroom:
-    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
+    init: true
+    cpus: "${MAGIC_CABINET_CPUS:-2.0}"
+    mem_limit: "${MAGIC_CABINET_MEMORY:-2g}"
     environment:
       NEXT_PUBLIC_PASCAL_PRODUCT_PROFILE: magic-cabinet
       PASCAL_DATA_DIR: /data
@@ -16,6 +18,7 @@ services:
     volumes:
       - pascal-data:/data
     restart: unless-stopped
+    stop_grace_period: 20s
 
 volumes:
   pascal-data:

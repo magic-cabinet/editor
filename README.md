@@ -10,52 +10,63 @@ A 3D building editor built with React Three Fiber and WebGPU.
 
 https://github.com/user-attachments/assets/8b50e7cf-cebe-4579-9cf3-8786b35f7b6b
 
-## Magic Cabinet dev: editor + MCP in Docker
+## Magic Cabinet Docker quick start
 
-The development stack runs the Magic Cabinet editor and its Streamable HTTP MCP
-server in one container. Both processes share the same persistent scene database,
-so an MCP edit appears live in the open 3D editor.
+The `dev` branch ships one local container containing the Pascal showroom,
+nginx, and the Streamable HTTP Magic Cabinet MCP server. The editor and MCP
+share a persistent scene store, so MCP changes appear in the open browser scene.
 
-Compose enables the MCP server's single-tenant local-workspace mode so the
-authenticated MCP connection can edit scenes created by the co-located editor.
-Do not enable `PASCAL_MCP_LOCAL_WORKSPACE` in a multi-tenant deployment; provide
-a trusted `resolveIdentity` adapter there instead.
+For the full team workflow, start from the sibling
+[`magic-cabinet/mvp`](https://github.com/magic-cabinet/mvp) repository. Its
+bootstrap script clones or safely updates this checkout, starts Docker, and
+verifies both the editor and MCP. Use the steps below when working directly in
+this repository.
 
-### 1. Start the stack
+### Requirements
 
-Docker Desktop is the only prerequisite.
+- Docker Desktop with Docker Compose v2
+- Git
+- 2 CPU cores and 2 GB of Docker memory available by default
+
+The Compose file does not force `amd64`; Docker selects the host's native Linux
+architecture on Apple Silicon, ARM64 Linux, and x86-64. WebGPU rendering runs in
+the browser, not in the container.
+
+### Start
 
 ```bash
 git clone --branch dev https://github.com/magic-cabinet/editor.git
 cd editor
-docker compose up --build -d
+docker compose up --build --detach
 ```
 
-For an existing checkout:
+The first build downloads and compiles the workspace. Later source-only builds
+reuse the dependency layer and Bun package cache.
+
+Open [http://127.0.0.1:8080/live](http://127.0.0.1:8080/live). The authenticated
+MCP endpoint is `http://127.0.0.1:8080/mcp`.
+
+### Verify locally
+
+Windows PowerShell:
+
+```powershell
+.\docker\smoke-test.ps1
+```
+
+macOS, Linux, or Git Bash:
 
 ```bash
-git fetch origin
-git switch dev
-git pull --ff-only origin dev
-docker compose up --build -d
+./docker/smoke-test.sh
 ```
 
-Open the live editor at [http://127.0.0.1:8080/live](http://127.0.0.1:8080/live).
-The MCP endpoint is `http://127.0.0.1:8080/mcp`.
+The check waits for Docker health, loads `/live`, and performs an authenticated
+MCP `initialize` request. It exits nonzero if any part of the stack is broken.
 
-The pilot's local-only development token is `magic-cabinet-dev`. To use a
-different token or port, create a `.env` file before starting:
+### Connect an MCP client
 
-```dotenv
-PASCAL_MCP_HTTP_TOKEN=replace-with-a-long-random-value
-MAGIC_CABINET_PORT=8080
-```
-
-Never reuse the development token for a hosted environment.
-
-### 2. Connect Codex
-
-Add this to `~/.codex/config.toml`, then restart Codex:
+The local-only development token is `magic-cabinet-dev`. Add this to the Codex
+configuration, then restart Codex so it reloads MCP servers:
 
 ```toml
 [mcp_servers.magic-cabinet]
@@ -63,40 +74,7 @@ url = "http://127.0.0.1:8080/mcp"
 http_headers = { Authorization = "Bearer magic-cabinet-dev" }
 ```
 
-If `.env` contains a custom token, use that same value in the Authorization
-header. Other MCP clients can connect to the same URL with the same Bearer
-header.
-
-### Connect another person on the same network
-
-Find the host Mac's LAN address:
-
-```bash
-ipconfig getifaddr en0
-```
-
-Replace `127.0.0.1` in the client configuration with that address. For example,
-if the command prints `10.0.0.205`, use:
-
-```toml
-[mcp_servers.pascal-party]
-url = "http://10.0.0.205:8080/mcp"
-http_headers = { Authorization = "Bearer magic-cabinet-dev" }
-```
-
-Each client receives an isolated MCP session while all clients share the same
-persistent project database. Keep this development endpoint on a trusted LAN;
-set a private `PASCAL_MCP_HTTP_TOKEN` before sharing beyond the local network.
-
-### 3. Verify and use it
-
-```bash
-docker compose ps
-curl --fail http://127.0.0.1:8080/api/health
-docker compose logs -f showroom
-```
-
-The server exposes seven Magic Cabinet tools:
+The MCP server exposes these Magic Cabinet tools:
 
 - `start_magic_kitchen_session`
 - `update_magic_kitchen`
@@ -106,12 +84,48 @@ The server exposes seven Magic Cabinet tools:
 - `get_kitchen_bom`
 - `validate_magic_kitchen_session`
 
-Try: “Use the Magic Cabinet MCP to start a sage-and-oak kitchen session, open
-its editor URL, switch to the workwall camera, and validate the scene.”
+### Configuration
 
-Scenes persist in the Docker volume across restarts. Stop the stack with
-`docker compose down`. Running `docker compose down -v` also deletes the saved
-local scenes.
+Create `.env` next to `compose.yml` to override local defaults:
+
+```dotenv
+PASCAL_MCP_HTTP_TOKEN=replace-with-a-long-random-value
+MAGIC_CABINET_PORT=8080
+MAGIC_CABINET_CPUS=2.0
+MAGIC_CABINET_MEMORY=2g
+```
+
+Pass the same custom token to the smoke test and MCP client. Never reuse the
+development token for a hosted environment. `PASCAL_MCP_LOCAL_WORKSPACE` is
+intentionally enabled only for this single-tenant local stack; multi-tenant
+deployments must provide a trusted identity adapter.
+
+### Operate and troubleshoot
+
+```bash
+docker compose ps
+docker compose logs --tail=200 showroom
+docker compose restart showroom
+docker compose down
+```
+
+Check `docker compose ps` and the health endpoint before debugging a blank or
+loading browser canvas:
+
+```bash
+curl --fail http://127.0.0.1:8080/api/health
+```
+
+- `unhealthy` or restart loops: inspect `docker compose logs showroom`.
+- Port already in use: set a different `MAGIC_CABINET_PORT` in `.env` and use
+  that port in the browser and MCP client.
+- MCP `401 Unauthorized`: the client token does not match
+  `PASCAL_MCP_HTTP_TOKEN`.
+- MCP configuration changed but tools are stale: restart the MCP client.
+
+Scenes survive rebuilds and `docker compose down` in the `pascal-data` volume.
+Use `docker compose down -v` only when you intentionally want to delete all
+saved local scenes.
 
 ## Using Published Packages
 
