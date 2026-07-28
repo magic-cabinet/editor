@@ -11,6 +11,8 @@ export const getProjectStatusInput = {
 export const getProjectStatusOutput = {
   id: z.string(),
   projectId: z.string(),
+  defaultSceneId: z.string().nullable(),
+  sceneCount: z.number().int().nonnegative(),
   name: z.string(),
   editorUrl: z.string(),
   url: z.string(),
@@ -50,8 +52,9 @@ export function registerGetProjectStatus(server: McpServer, operations: SceneOpe
           throwMcpError(ErrorCode.InvalidParams, 'project_not_found', { id })
         }
         const activeScene = operations.getActiveScene()
-        if (activeScene?.id !== status.id) {
-          const scene = await operations.loadStoredScene(status.id)
+        const sceneId = status.defaultSceneId ?? status.id
+        if (activeScene?.id !== sceneId) {
+          const scene = await operations.loadStoredScene(sceneId)
           if (scene) {
             operations.loadJSON(scene.graph)
             operations.setActiveScene(scene)

@@ -59,6 +59,11 @@ share a different directory, or `PASCAL_DB_PATH` when you need an exact database
 file path. The store uses WAL mode and transactional version checks so separate
 local processes can save and open the same scene database.
 
+Projects are persisted independently from scenes. An empty project survives
+server restarts, and multiple scene IDs can share one `projectId`. Project
+status reports `defaultSceneId` and `sceneCount`; deleting the default scene
+advances the project to its next available scene without deleting the project.
+
 ## Identity and session isolation
 
 Every MCP connection receives an immutable creation context containing the

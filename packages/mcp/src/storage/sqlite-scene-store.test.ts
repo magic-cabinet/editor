@@ -96,6 +96,71 @@ describe('SqliteSceneStore', () => {
     expect(store.backend).toBe('sqlite')
   })
 
+  test('persists an empty project across store restarts', async () => {
+    const created = await store.createProject({
+      id: 'party-house',
+      name: 'Party House',
+      ownerId: 'user-1',
+      workspaceId: 'workspace-party',
+    })
+    expect(created.defaultSceneId).toBeNull()
+    expect(created.sceneCount).toBe(0)
+
+    store.close()
+    store = createStore(rootDir)
+
+    const reopened = await store.getProjectStatus('party-house')
+    expect(reopened).toMatchObject({
+      projectId: 'party-house',
+      name: 'Party House',
+      ownerId: 'user-1',
+      workspaceId: 'workspace-party',
+      defaultSceneId: null,
+      sceneCount: 0,
+    })
+  })
+
+  test('keeps multiple scenes in one project and advances the default after deletion', async () => {
+    await store.createProject({ id: 'design-party', name: 'Design Party' })
+    await store.save({
+      id: 'design-party',
+      name: 'Main kitchen',
+      projectId: 'design-party',
+      graph: makeGraph(),
+    })
+    await store.save({
+      id: 'living-room-option',
+      name: 'Living room option',
+      projectId: 'design-party',
+      graph: makeGraph(),
+    })
+
+    expect(
+      (await store.list({ projectId: 'design-party' })).map((scene) => scene.id).sort(),
+    ).toEqual(['design-party', 'living-room-option'])
+    expect(await store.getProjectStatus('design-party')).toMatchObject({
+      projectId: 'design-party',
+      name: 'Design Party',
+      defaultSceneId: 'design-party',
+      sceneCount: 2,
+      editorUrl: '/scene/design-party',
+    })
+
+    await store.delete('design-party')
+    expect(await store.getProjectStatus('design-party')).toMatchObject({
+      defaultSceneId: 'living-room-option',
+      sceneCount: 1,
+      editorUrl: '/scene/living-room-option',
+    })
+
+    await store.delete('living-room-option')
+    expect(await store.getProjectStatus('design-party')).toMatchObject({
+      defaultSceneId: null,
+      sceneCount: 0,
+      isEmpty: true,
+    })
+  })
+
   test('round-trips a saved scene through a reopened database', async () => {
     const graph = makeGraph({ installedPlugins: ['magic-cabinet:pilot'] })
     const saved = await store.save({ id: 'kitchen', name: 'Kitchen', graph })
@@ -335,6 +400,23 @@ describe('SqliteSceneStore', () => {
           graph_json TEXT NOT NULL
         );
       `)
+      const now = '2026-01-01T00:00:00.000Z'
+      const graphJson = JSON.stringify(makeGraph())
+      db.query(
+        `INSERT INTO scenes (
+           id, name, project_id, owner_id, thumbnail_url, version,
+           created_at, updated_at, size_bytes, node_count, graph_json
+         ) VALUES (?, ?, NULL, ?, NULL, 1, ?, ?, ?, ?, ?)`,
+      ).run(
+        'legacy-scene',
+        'Legacy scene',
+        'legacy-owner',
+        now,
+        now,
+        Buffer.byteLength(graphJson, 'utf8'),
+        2,
+        graphJson,
+      )
     } finally {
       db.close()
     }
@@ -353,9 +435,20 @@ describe('SqliteSceneStore', () => {
       expect(columnNames('scene_revisions')).toContain('command_json')
       expect(columnNames('scene_events')).toContain('command_id')
       expect(columnNames('scene_events')).toContain('command_json')
+      const projectTable = migrated
+        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projects'")
+        .get() as { name: string } | null
+      expect(projectTable?.name).toBe('projects')
     } finally {
       migrated.close()
     }
+    expect((await store.load('legacy-scene'))?.projectId).toBe('legacy-scene')
+    expect(await store.getProjectStatus('legacy-scene')).toMatchObject({
+      projectId: 'legacy-scene',
+      defaultSceneId: 'legacy-scene',
+      sceneCount: 1,
+      ownerId: 'legacy-owner',
+    })
   })
 
   test('atomically commits a revision and matching live event', async () => {

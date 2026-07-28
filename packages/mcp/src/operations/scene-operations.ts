@@ -342,6 +342,10 @@ class SceneOperationsFacade implements SceneOperations {
     if (existing) this.assertAccess(existing)
 
     const projectId = options.projectId ?? existing?.projectId ?? null
+    if (projectId && store.getProjectStatus) {
+      const project = await store.getProjectStatus(projectId)
+      if (project) this.assertAccess(project)
+    }
     const command =
       options.command ??
       this.commandEnvelope(options.operation ?? 'save_scene', {

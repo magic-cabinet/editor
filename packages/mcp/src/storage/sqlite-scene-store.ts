@@ -66,14 +66,16 @@ interface SceneEventRow {
   command_json: string | null
 }
 
-interface ProjectPlaceholder {
+interface ProjectRow {
   id: string
   name: string
-  ownerId: string | null
-  workspaceId: string | null
-  thumbnailUrl: string | null
-  createdAt: string
-  updatedAt: string
+  owner_id: string | null
+  workspace_id: string | null
+  thumbnail_url: string | null
+  is_private: number
+  default_scene_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 const GraphSchema = z.object({
@@ -163,53 +165,35 @@ function hashGraphJson(graphJson: string): string {
   return createHash('sha256').update(graphJson).digest('hex')
 }
 
-function rowToProjectStatus(row: SceneRow): ProjectStatus {
-  const editorUrl = editorUrlForScene(row.id)
-  return {
-    id: row.id,
-    projectId: row.project_id ?? row.id,
-    name: row.name,
-    editorUrl,
-    url: editorUrl,
-    ownerId: row.owner_id,
-    workspaceId: row.workspace_id,
-    thumbnailUrl: row.thumbnail_url,
-    publishedVersion: row.version,
-    latestVersion: row.version,
-    draftVersion: null,
-    browserVisibleVersion: row.version,
-    version: row.version,
-    isEmpty: row.node_count === 0,
-    sizeBytes: row.size_bytes,
-    nodeCount: row.node_count,
-    graphHash: hashGraphJson(row.graph_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }
-}
-
-function placeholderToProjectStatus(project: ProjectPlaceholder): ProjectStatus {
-  const editorUrl = editorUrlForScene(project.id)
+function rowToProjectStatus(
+  project: ProjectRow,
+  scene: SceneRow | null,
+  sceneCount: number,
+): ProjectStatus {
+  const defaultSceneId = scene?.id ?? null
+  const editorUrl = editorUrlForScene(defaultSceneId ?? project.id)
   return {
     id: project.id,
     projectId: project.id,
+    defaultSceneId,
+    sceneCount,
     name: project.name,
     editorUrl,
     url: editorUrl,
-    ownerId: project.ownerId,
-    workspaceId: project.workspaceId,
-    thumbnailUrl: project.thumbnailUrl,
-    publishedVersion: null,
-    latestVersion: null,
+    ownerId: project.owner_id,
+    workspaceId: project.workspace_id,
+    thumbnailUrl: scene?.thumbnail_url ?? project.thumbnail_url,
+    publishedVersion: scene?.version ?? null,
+    latestVersion: scene?.version ?? null,
     draftVersion: null,
-    browserVisibleVersion: null,
-    version: 0,
-    isEmpty: true,
-    sizeBytes: 0,
-    nodeCount: 0,
-    graphHash: null,
-    createdAt: project.createdAt,
-    updatedAt: project.updatedAt,
+    browserVisibleVersion: scene?.version ?? null,
+    version: scene?.version ?? 0,
+    isEmpty: !scene || scene.node_count === 0,
+    sizeBytes: scene?.size_bytes ?? 0,
+    nodeCount: scene?.node_count ?? 0,
+    graphHash: scene ? hashGraphJson(scene.graph_json) : null,
+    createdAt: project.created_at,
+    updatedAt: project.updated_at,
   }
 }
 
@@ -263,6 +247,11 @@ function parseGraph(raw: string, context: string): SceneGraph {
 function asSceneRow(value: unknown): SceneRow | null {
   if (!value || typeof value !== 'object') return null
   return value as SceneRow
+}
+
+function asProjectRow(value: unknown): ProjectRow | null {
+  if (!value || typeof value !== 'object') return null
+  return value as ProjectRow
 }
 
 function rowToSceneEvent(row: SceneEventRow): SceneEvent {
@@ -332,7 +321,6 @@ export class SqliteSceneStore implements SceneStore {
   readonly databasePath: string
 
   private readonly maxSceneBytes: number
-  private readonly projectPlaceholders = new Map<string, ProjectPlaceholder>()
   private db: SqliteDatabase | null = null
   private dbPromise: Promise<SqliteDatabase> | null = null
 
@@ -343,36 +331,50 @@ export class SqliteSceneStore implements SceneStore {
   }
 
   async createProject(opts: ProjectCreateOptions): Promise<ProjectStatus> {
-    const db = await this.database()
-    assertValidName(opts.name)
-    const id = opts.id ? sanitizeSlug(opts.id) : this.generateUniqueId(db)
-    if (!isValidSlug(id)) {
-      throw new SceneInvalidError(`Invalid project id after sanitization: "${id}"`)
-    }
-    if (this.getRow(db, id)) {
-      throw new SceneInvalidError(`Project with id "${id}" already exists`)
-    }
-    const now = new Date().toISOString()
-    const project: ProjectPlaceholder = {
-      id,
-      name: opts.name,
-      ownerId: opts.ownerId ?? null,
-      workspaceId: opts.workspaceId ?? null,
-      thumbnailUrl: null,
-      createdAt: now,
-      updatedAt: now,
-    }
-    this.projectPlaceholders.set(id, project)
-    return placeholderToProjectStatus(project)
+    return this.withWriteTransaction((db) => {
+      assertValidName(opts.name)
+      const id = opts.id ? sanitizeSlug(opts.id) : this.generateUniqueProjectId(db)
+      if (!isValidSlug(id)) {
+        throw new SceneInvalidError(`Invalid project id after sanitization: "${id}"`)
+      }
+      if (this.getProjectRow(db, id) || this.getRow(db, id)) {
+        throw new SceneInvalidError(`Project with id "${id}" already exists`)
+      }
+      const now = new Date().toISOString()
+      db.query(
+        `INSERT INTO projects (
+           id, name, owner_id, workspace_id, thumbnail_url, is_private,
+           default_scene_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?)`,
+      ).run(
+        id,
+        opts.name,
+        opts.ownerId ?? null,
+        opts.workspaceId ?? null,
+        opts.isPrivate === false ? 0 : 1,
+        now,
+        now,
+      )
+      return rowToProjectStatus(this.getProjectRow(db, id)!, null, 0)
+    })
   }
 
   async getProjectStatus(id: string): Promise<ProjectStatus | null> {
     const db = await this.database()
-    const safeId = sanitizeSlug(id)
-    const row = this.getRow(db, safeId)
-    if (row) return rowToProjectStatus(row)
-    const placeholder = this.projectPlaceholders.get(safeId)
-    return placeholder ? placeholderToProjectStatus(placeholder) : null
+    let safeId = id
+    try {
+      safeId = sanitizeSlug(id)
+    } catch {
+      // Legacy project ids were stored verbatim; try the exact id below.
+    }
+    let project = this.getProjectRow(db, id) ?? this.getProjectRow(db, safeId)
+    if (!project) {
+      const scene = this.getRow(db, id) ?? this.getRow(db, safeId)
+      if (scene?.project_id) project = this.getProjectRow(db, scene.project_id)
+    }
+    if (!project) return null
+    const scene = this.getProjectDefaultScene(db, project)
+    return rowToProjectStatus(project, scene, this.countProjectScenes(db, project.id))
   }
 
   async save(opts: SceneSaveOptions): Promise<SceneMeta> {
@@ -392,7 +394,6 @@ export class SqliteSceneStore implements SceneStore {
     }
 
     const existing = this.getRow(db, id)
-    const placeholder = this.projectPlaceholders.get(id)
 
     if (existing && providedId !== undefined && opts.expectedVersion === undefined) {
       throw new SceneInvalidError(
@@ -419,20 +420,34 @@ export class SqliteSceneStore implements SceneStore {
 
     const now = new Date().toISOString()
     const version = (existing?.version ?? 0) + 1
-    const createdAt = existing?.created_at ?? placeholder?.createdAt ?? now
+    const createdAt = existing?.created_at ?? now
     const nodeCount = Object.keys(opts.graph.nodes ?? {}).length
-    const projectId = opts.projectId ?? existing?.project_id ?? (placeholder ? id : null)
-    const ownerId = opts.ownerId ?? existing?.owner_id ?? placeholder?.ownerId ?? null
-    const workspaceId =
-      opts.workspaceId ?? existing?.workspace_id ?? placeholder?.workspaceId ?? null
+    const projectId = opts.projectId ?? existing?.project_id ?? id
+    let project = this.getProjectRow(db, projectId)
+    if (!project) {
+      this.insertProject(db, {
+        id: projectId,
+        name: opts.name,
+        ownerId: opts.ownerId ?? existing?.owner_id ?? null,
+        workspaceId: opts.workspaceId ?? existing?.workspace_id ?? null,
+        thumbnailUrl: opts.thumbnailUrl ?? existing?.thumbnail_url ?? null,
+        defaultSceneId: null,
+        now,
+      })
+      project = this.getProjectRow(db, projectId)!
+    }
+    if (!existing && this.getProjectRow(db, id) && id !== projectId) {
+      throw new SceneInvalidError(`Scene id "${id}" is already reserved by project "${id}"`)
+    }
+    const ownerId = opts.ownerId ?? existing?.owner_id ?? project.owner_id
+    const workspaceId = opts.workspaceId ?? existing?.workspace_id ?? project.workspace_id
     const command = normalizeCommandEnvelope(opts.command, {
       operation: opts.operation ?? 'save_scene',
       projectId,
       sceneId: id,
       baseRevision: existing?.version ?? 0,
     })
-    const thumbnailUrl =
-      opts.thumbnailUrl ?? existing?.thumbnail_url ?? placeholder?.thumbnailUrl ?? null
+    const thumbnailUrl = opts.thumbnailUrl ?? existing?.thumbnail_url ?? project.thumbnail_url
 
     if (existing) {
       db.query(
@@ -498,7 +513,10 @@ export class SqliteSceneStore implements SceneStore {
       command ? JSON.stringify(command) : null,
     )
 
-    this.projectPlaceholders.delete(id)
+    this.touchProjectAfterSave(db, projectId, id, now)
+    if (existing?.project_id && existing.project_id !== projectId) {
+      this.refreshProjectDefault(db, existing.project_id, now)
+    }
 
     return {
       id,
@@ -577,7 +595,10 @@ export class SqliteSceneStore implements SceneStore {
           `Scene "${safeId}" version mismatch: expected ${opts.expectedVersion}, got ${existing.version}`,
         )
       }
+      const projectId = existing.project_id
+      const now = new Date().toISOString()
       db.query('DELETE FROM scenes WHERE id = ?').run(safeId)
+      if (projectId) this.refreshProjectDefault(db, projectId, now)
       return true
     })
   }
@@ -625,6 +646,9 @@ export class SqliteSceneStore implements SceneStore {
         command?.commandId ?? null,
         command ? JSON.stringify(command) : null,
       )
+      if (existing.project_id) {
+        db.query('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, existing.project_id)
+      }
 
       return {
         ...rowToMeta(existing),
@@ -743,6 +767,24 @@ export class SqliteSceneStore implements SceneStore {
 
   private migrate(db: SqliteDatabase): void {
     db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL CHECK (length(name) >= 1 AND length(name) <= 200),
+        owner_id TEXT,
+        workspace_id TEXT,
+        thumbnail_url TEXT,
+        is_private INTEGER NOT NULL DEFAULT 1 CHECK (is_private IN (0, 1)),
+        default_scene_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS projects_owner_updated_idx
+        ON projects(owner_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS projects_workspace_updated_idx
+        ON projects(workspace_id, updated_at DESC);
+
       CREATE TABLE IF NOT EXISTS scenes (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL CHECK (length(name) >= 1 AND length(name) <= 200),
@@ -798,6 +840,7 @@ export class SqliteSceneStore implements SceneStore {
     this.ensureColumn(db, 'scene_revisions', 'command_json', 'TEXT')
     this.ensureColumn(db, 'scene_events', 'command_id', 'TEXT')
     this.ensureColumn(db, 'scene_events', 'command_json', 'TEXT')
+    this.backfillProjects(db)
     db.exec(`
       CREATE INDEX IF NOT EXISTS scenes_workspace_updated_idx
         ON scenes(workspace_id, updated_at DESC);
@@ -840,6 +883,163 @@ export class SqliteSceneStore implements SceneStore {
     )
   }
 
+  private getProjectRow(db: SqliteDatabase, id: string): ProjectRow | null {
+    return asProjectRow(
+      db
+        .query(
+          `SELECT id, name, owner_id, workspace_id, thumbnail_url, is_private,
+                  default_scene_id, created_at, updated_at
+             FROM projects
+            WHERE id = ?`,
+        )
+        .get(id),
+    )
+  }
+
+  private getProjectDefaultScene(db: SqliteDatabase, project: ProjectRow): SceneRow | null {
+    if (project.default_scene_id) {
+      const selected = this.getRow(db, project.default_scene_id)
+      if (selected?.project_id === project.id) return selected
+    }
+    return asSceneRow(
+      db
+        .query(
+          `SELECT id, name, project_id, owner_id, workspace_id, thumbnail_url, version,
+                  created_at, updated_at, size_bytes, node_count, graph_json
+             FROM scenes
+            WHERE project_id = ?
+            ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC, id ASC
+            LIMIT 1`,
+        )
+        .get(project.id, project.id),
+    )
+  }
+
+  private countProjectScenes(db: SqliteDatabase, projectId: string): number {
+    const row = db
+      .query('SELECT COUNT(*) AS count FROM scenes WHERE project_id = ?')
+      .get(projectId) as { count?: number | bigint } | null
+    return Number(row?.count ?? 0)
+  }
+
+  private insertProject(
+    db: SqliteDatabase,
+    options: {
+      id: string
+      name: string
+      ownerId: string | null
+      workspaceId: string | null
+      thumbnailUrl: string | null
+      defaultSceneId: string | null
+      now: string
+    },
+  ): void {
+    if (
+      typeof options.id !== 'string' ||
+      options.id.length === 0 ||
+      options.id.length > MAX_NAME_LENGTH
+    ) {
+      throw new SceneInvalidError(`Invalid project id: "${options.id}"`)
+    }
+    assertValidName(options.name)
+    db.query(
+      `INSERT INTO projects (
+         id, name, owner_id, workspace_id, thumbnail_url, is_private,
+         default_scene_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+    ).run(
+      options.id,
+      options.name,
+      options.ownerId,
+      options.workspaceId,
+      options.thumbnailUrl,
+      options.defaultSceneId,
+      options.now,
+      options.now,
+    )
+  }
+
+  private touchProjectAfterSave(
+    db: SqliteDatabase,
+    projectId: string,
+    sceneId: string,
+    now: string,
+  ): void {
+    const project = this.getProjectRow(db, projectId)
+    if (!project) {
+      throw new SceneInvalidError(`Project "${projectId}" not found after scene save`)
+    }
+    const defaultSceneId =
+      sceneId === projectId || project.default_scene_id === null
+        ? sceneId
+        : project.default_scene_id
+    db.query('UPDATE projects SET default_scene_id = ?, updated_at = ? WHERE id = ?').run(
+      defaultSceneId,
+      now,
+      projectId,
+    )
+  }
+
+  private refreshProjectDefault(
+    db: SqliteDatabase,
+    projectId: string,
+    now: string,
+    touchUpdatedAt = true,
+  ): void {
+    const project = this.getProjectRow(db, projectId)
+    if (!project) return
+    const scene = this.getProjectDefaultScene(db, {
+      ...project,
+      default_scene_id: null,
+    })
+    if (touchUpdatedAt) {
+      db.query('UPDATE projects SET default_scene_id = ?, updated_at = ? WHERE id = ?').run(
+        scene?.id ?? null,
+        now,
+        projectId,
+      )
+    } else {
+      db.query('UPDATE projects SET default_scene_id = ? WHERE id = ?').run(
+        scene?.id ?? null,
+        projectId,
+      )
+    }
+  }
+
+  private backfillProjects(db: SqliteDatabase): void {
+    const scenes = db
+      .query(
+        `SELECT id, name, project_id, owner_id, workspace_id, thumbnail_url, version,
+                created_at, updated_at, size_bytes, node_count, graph_json
+           FROM scenes
+          ORDER BY updated_at DESC, id ASC`,
+      )
+      .all() as SceneRow[]
+    const projectIds = new Set<string>()
+    for (const scene of scenes) {
+      const projectId = scene.project_id ?? scene.id
+      projectIds.add(projectId)
+      if (scene.project_id === null) {
+        db.query('UPDATE scenes SET project_id = ? WHERE id = ?').run(projectId, scene.id)
+      }
+      if (!this.getProjectRow(db, projectId)) {
+        this.insertProject(db, {
+          id: projectId,
+          name: scene.name,
+          ownerId: scene.owner_id,
+          workspaceId: scene.workspace_id,
+          thumbnailUrl: scene.thumbnail_url,
+          defaultSceneId: null,
+          now: scene.created_at,
+        })
+        db.query('UPDATE projects SET updated_at = ? WHERE id = ?').run(scene.updated_at, projectId)
+      }
+    }
+    for (const projectId of projectIds) {
+      this.refreshProjectDefault(db, projectId, new Date().toISOString(), false)
+    }
+  }
+
   private ensureColumn(
     db: SqliteDatabase,
     table: 'scenes' | 'scene_revisions' | 'scene_events',
@@ -854,8 +1054,16 @@ export class SqliteSceneStore implements SceneStore {
   private generateUniqueId(db: SqliteDatabase): string {
     for (let attempt = 0; attempt < 20; attempt++) {
       const id = generateSlug()
-      if (!this.getRow(db, id)) return id
+      if (!(this.getRow(db, id) || this.getProjectRow(db, id))) return id
     }
     throw new SceneInvalidError('Failed to generate a unique scene id')
+  }
+
+  private generateUniqueProjectId(db: SqliteDatabase): string {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const id = generateSlug()
+      if (!(this.getProjectRow(db, id) || this.getRow(db, id))) return id
+    }
+    throw new SceneInvalidError('Failed to generate a unique project id')
   }
 }

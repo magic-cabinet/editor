@@ -120,6 +120,10 @@ export interface ProjectCreateOptions {
 export interface ProjectStatus {
   id: SceneId
   projectId: string
+  /** Scene opened by editorUrl. Null while the project has no scenes. */
+  defaultSceneId?: SceneId | null
+  /** Number of scenes currently attached to the project. */
+  sceneCount?: number
   name: string
   editorUrl: string
   url: string

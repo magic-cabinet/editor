@@ -67,6 +67,27 @@ If `.env` contains a custom token, use that same value in the Authorization
 header. Other MCP clients can connect to the same URL with the same Bearer
 header.
 
+### Connect another person on the same network
+
+Find the host Mac's LAN address:
+
+```bash
+ipconfig getifaddr en0
+```
+
+Replace `127.0.0.1` in the client configuration with that address. For example,
+if the command prints `10.0.0.205`, use:
+
+```toml
+[mcp_servers.pascal-party]
+url = "http://10.0.0.205:8080/mcp"
+http_headers = { Authorization = "Bearer magic-cabinet-dev" }
+```
+
+Each client receives an isolated MCP session while all clients share the same
+persistent project database. Keep this development endpoint on a trusted LAN;
+set a private `PASCAL_MCP_HTTP_TOKEN` before sharing beyond the local network.
+
 ### 3. Verify and use it
 
 ```bash

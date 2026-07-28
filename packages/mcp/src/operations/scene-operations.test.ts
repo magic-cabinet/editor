@@ -128,9 +128,9 @@ describe('SceneOperationsFacade scene events', () => {
     })
 
     expect(meta.id).toBe('new-scene')
-    expect(meta.projectId).toBeNull()
+    expect(meta.projectId).toBe('new-scene')
     expect(meta.command?.sceneId).toBe('new-scene')
-    expect(meta.command?.projectId).toBeNull()
+    expect(meta.command?.projectId).toBe('new-scene')
     expect(meta.command?.sceneId).not.toBe('active-scene')
   })
 
@@ -158,6 +158,15 @@ describe('SceneOperationsFacade scene events', () => {
     await expect(
       intruder.renameStoredScene('private-scene', 'Stolen', { expectedVersion: 1 }),
     ).rejects.toThrow(SceneAccessDeniedError)
+    await expect(
+      intruder.saveScene({
+        id: 'foreign-project-scene',
+        name: 'Foreign project scene',
+        projectId: 'private-scene',
+        graph: makeGraph(),
+      }),
+    ).rejects.toThrow(SceneAccessDeniedError)
+    expect(await store.load('foreign-project-scene')).toBeNull()
     expect(await intruder.listScenes()).toEqual([])
   })
 
@@ -291,5 +300,16 @@ describe('SceneOperationsFacade scene events', () => {
     expect(updated.ownerId).toBe('user-1')
     expect(updated.workspaceId).toBe('workspace-shared')
     expect(updated.command?.ownerId).toBe('user-2')
+
+    const option = await collaborator.saveScene({
+      id: 'shared-option',
+      name: 'Shared option',
+      projectId: 'shared',
+      graph: makeGraph(),
+    })
+    expect(option.projectId).toBe('shared')
+    expect(
+      (await collaborator.listScenes({ projectId: 'shared' })).map((scene) => scene.id).sort(),
+    ).toEqual(['shared', 'shared-option'])
   })
 })

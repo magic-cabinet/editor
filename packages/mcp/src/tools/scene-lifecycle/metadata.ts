@@ -44,6 +44,8 @@ export function projectStatusPayload(status: ProjectStatus, nextStep?: string) {
   return {
     id: status.id,
     projectId: status.projectId,
+    defaultSceneId: status.defaultSceneId ?? null,
+    sceneCount: status.sceneCount ?? 0,
     name: status.name,
     editorUrl: status.editorUrl,
     url: status.url,
