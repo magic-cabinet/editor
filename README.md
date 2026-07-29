@@ -28,6 +28,20 @@ Docker Desktop is the only prerequisite.
 ```bash
 git clone --branch dev https://github.com/magic-cabinet/editor.git
 cd editor
+cp .env.example .env
+openssl rand -hex 32
+```
+
+Put that generated value in `.env`:
+
+```dotenv
+PASCAL_MCP_HTTP_TOKEN=replace-with-the-generated-value
+MAGIC_CABINET_PORT=8080
+```
+
+Then start the loopback-only stack:
+
+```bash
 docker compose up --build -d
 ```
 
@@ -37,21 +51,16 @@ For an existing checkout:
 git fetch origin
 git switch dev
 git pull --ff-only origin dev
+# Ensure .env contains a freshly generated PASCAL_MCP_HTTP_TOKEN.
 docker compose up --build -d
 ```
 
 Open the live editor at [http://127.0.0.1:8080/live](http://127.0.0.1:8080/live).
 The MCP endpoint is `http://127.0.0.1:8080/mcp`.
 
-The pilot's local-only development token is `magic-cabinet-dev`. To use a
-different token or port, create a `.env` file before starting:
-
-```dotenv
-PASCAL_MCP_HTTP_TOKEN=replace-with-a-long-random-value
-MAGIC_CABINET_PORT=8080
-```
-
-Never reuse the development token for a hosted environment.
+Compose refuses to start without `PASCAL_MCP_HTTP_TOKEN`; there is no checked-in
+or predictable fallback. The published editor and MCP port binds to
+`127.0.0.1` only. Never reuse this local token for a hosted environment.
 
 ### 2. Connect Codex
 
@@ -60,33 +69,17 @@ Add this to `~/.codex/config.toml`, then restart Codex:
 ```toml
 [mcp_servers.magic-cabinet]
 url = "http://127.0.0.1:8080/mcp"
-http_headers = { Authorization = "Bearer magic-cabinet-dev" }
+http_headers = { Authorization = "Bearer replace-with-the-generated-value" }
 ```
 
-If `.env` contains a custom token, use that same value in the Authorization
-header. Other MCP clients can connect to the same URL with the same Bearer
-header.
+Use the same value from `.env` in the Authorization header.
 
 ### Connect another person on the same network
 
-Find the host Mac's LAN address:
-
-```bash
-ipconfig getifaddr en0
-```
-
-Replace `127.0.0.1` in the client configuration with that address. For example,
-if the command prints `10.0.0.205`, use:
-
-```toml
-[mcp_servers.pascal-party]
-url = "http://10.0.0.205:8080/mcp"
-http_headers = { Authorization = "Bearer magic-cabinet-dev" }
-```
-
-Each client receives an isolated MCP session while all clients share the same
-persistent project database. Keep this development endpoint on a trusted LAN;
-set a private `PASCAL_MCP_HTTP_TOKEN` before sharing beyond the local network.
+The default Compose stack is intentionally unavailable over the LAN. For a
+second machine, use an authenticated SSH tunnel or a TLS reverse proxy to the
+loopback endpoint. Do not expose the plaintext MCP port or weaken the loopback
+binding in `compose.yml`.
 
 ### 3. Verify and use it
 
@@ -96,12 +89,9 @@ curl --fail http://127.0.0.1:8080/api/health
 docker compose logs -f showroom
 ```
 
-If the health check returns 404 while `docker compose ps` reports `healthy`,
-another process already holds IPv4 `127.0.0.1:8080`. Docker then binds only the
-IPv6 wildcard, `127.0.0.1` resolves to the other process, and its response is
-what you see. Confirm with `lsof -nP -iTCP:8080 -sTCP:LISTEN`, then set
-`MAGIC_CABINET_PORT` in `.env` to a free port and use it everywhere the
-quickstart says `8080`.
+If Compose reports that the address is already in use, confirm with
+`lsof -nP -iTCP:8080 -sTCP:LISTEN`, then set `MAGIC_CABINET_PORT` in `.env` to a
+free port and use it everywhere the quickstart says `8080`.
 
 The server exposes seven Magic Cabinet tools:
 
