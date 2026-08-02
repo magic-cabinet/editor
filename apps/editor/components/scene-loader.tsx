@@ -14,10 +14,10 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isMagicCabinetProfile, isSidebarTabVisible } from '@/lib/product-profile'
 import { BuildTab } from './build-tab'
 import { MagicShowroomControls } from './magic-showroom-controls'
 import { CommunityViewerToolbarLeft, CommunityViewerToolbarRight } from './viewer-toolbar'
-import { isMagicCabinetProfile, isSidebarTabVisible } from '@/lib/product-profile'
 
 export interface SceneMeta {
   id: string
