@@ -313,3 +313,17 @@ describe('SceneOperationsFacade scene events', () => {
     ).toEqual(['shared', 'shared-option'])
   })
 })
+
+// `exportSceneGraph` hand-copies fields off `exportJSON`, so a field it omits
+// is dropped from everything that persists through it — `save_scene`,
+// `publishLiveSceneSnapshot`, and variant generation.
+describe('SceneOperationsFacade exportSceneGraph', () => {
+  test('carries the material palette off the bridge', () => {
+    const bridge = new SceneBridge()
+    const materials = { mat_1: { id: 'mat_1', name: 'Oak', material: { preset: 'wood' } } }
+    bridge.loadJSON({ ...makeGraph(), materials } as never)
+    const operations = createSceneOperations({ bridge })
+
+    expect(operations.exportSceneGraph().materials).toEqual(materials)
+  })
+})

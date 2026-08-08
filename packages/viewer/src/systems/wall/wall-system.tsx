@@ -1,7 +1,6 @@
 import {
   type AnyNode,
   type AnyNodeId,
-  calculateLevelMiters,
   DEFAULT_LEVEL_HEIGHT,
   type DoorNode,
   getAdjacentWallIds,
@@ -22,6 +21,7 @@ import {
   resolveWallTop,
   sceneRegistry,
   spatialGridManager,
+  terrainSupportLift,
   useLiveNodeOverrides,
   useLiveTransforms,
   useScene,
@@ -33,10 +33,14 @@ import {
   type WindowNode,
 } from '@pascal-app/core'
 import { useFrame } from '@react-three/fiber'
+import { useEffect } from 'react'
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg'
 import { computeBoundsTree } from 'three-mesh-bvh'
 import { ensureRenderableGeometryAttributes, prepareBrushForCSG } from '../../lib/csg-utils'
+import { buildTerrainPerimeterFillGeometry } from '../../lib/terrain-perimeter-fill'
+import { clearLevelMiterCache, getCachedLevelMiters } from './level-miter-cache'
 import {
   buildOpeningCutoutGeometry,
   getOpeningCutoutBottomPadding,
@@ -511,6 +515,11 @@ export const WallSystem = () => {
   // tick and the next `useFrame` would still see the stale closure.
   useLiveNodeOverrides((s) => s.overrides)
 
+  // The miter cache is module-level, so it outlives this mount. Editor
+  // teardown resets the other shared singletons; without the same reset here a
+  // remount in the same tab keeps every previous level's walls reachable.
+  useEffect(() => () => clearLevelMiterCache(), [])
+
   useFrame(() => {
     const hasDirty = dirtyNodes.size > 0
     const hasPending = pendingAdjacentByLevel.size > 0
@@ -556,7 +565,7 @@ export const WallSystem = () => {
       }
 
       const levelWalls = getLevelWalls(levelId)
-      const miterData = calculateLevelMiters(levelWalls)
+      const miterData = getCachedLevelMiters(levelId, levelWalls)
       const rebuiltWallIds = new Set<string>()
 
       // Update dirty walls — always, no throttling. The dragged wall must
@@ -617,7 +626,7 @@ export const WallSystem = () => {
       for (const [levelId, pendingIds] of pendingAdjacentByLevel) {
         if (pendingIds.size === 0) continue
         const levelWalls = getLevelWalls(levelId)
-        const miterData = calculateLevelMiters(levelWalls)
+        const miterData = getCachedLevelMiters(levelId, levelWalls)
         for (const wallId of Array.from(pendingIds)) {
           if (useProgressiveAdjacentRebuilds) {
             if (rebuiltAdjacentThisFrame >= MAX_WALL_REBUILDS_PER_FRAME) {
@@ -714,8 +723,13 @@ function updateWallGeometry(wallId: string, miterData: WallMiterData) {
     node.curveOffset ?? 0,
     node.thickness,
     node.supportSlabId,
+    undefined,
+    node.supportOffset,
   )
   const slabElevation = slabSupport.elevation
+  const terrainBottomAt = node.fillToTerrain
+    ? (x: number, z: number) => terrainSupportLift(nodes, levelId, x, z)
+    : undefined
 
   const childrenIds = node.children || []
   // Merge live overrides into door / window children so cutouts track an
@@ -745,6 +759,7 @@ function updateWallGeometry(wallId: string, miterData: WallMiterData) {
     slabSupport.baseElevation,
     slabSupport.baseSegments,
     planeTop,
+    terrainBottomAt,
   )
   const wallAngle = Math.atan2(node.end[1] - node.start[1], node.end[0] - node.start[0])
   // World transform the render mesh will apply (position + Y-rotation below).
@@ -770,6 +785,7 @@ function updateWallGeometry(wallId: string, miterData: WallMiterData) {
       slabSupport.baseElevation,
       slabSupport.baseSegments,
       planeTop,
+      terrainBottomAt,
     )
     collisionMesh.geometry.dispose()
     collisionMesh.geometry = collisionGeo
@@ -851,6 +867,72 @@ function applyWorldPlanarWallUVs(
  * Key insight from demo: polygon is built in WORLD coordinates first,
  * then we transform to wall-local for the 3D mesh.
  */
+const WALL_TERRAIN_SAMPLE_STEP = 0.25
+
+type WallTerrainBottomSampler = (x: number, z: number) => number | null
+
+function densifyClosedWallPerimeter(points: Point2D[]): Point2D[] {
+  const dense: Point2D[] = []
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index]!
+    const end = points[(index + 1) % points.length]!
+    const length = Math.hypot(end.x - start.x, end.y - start.y)
+    const segments = Math.max(1, Math.ceil(length / WALL_TERRAIN_SAMPLE_STEP))
+    for (let segment = 0; segment < segments; segment += 1) {
+      const t = segment / segments
+      dense.push({
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+      })
+    }
+  }
+  return dense
+}
+
+function buildWallTerrainFillGeometry(
+  perimeter: Point2D[],
+  worldToLocal: (point: Point2D) => { x: number; z: number },
+  wallBaseElevation: number,
+  terrainBottomAt: WallTerrainBottomSampler,
+): THREE.BufferGeometry | null {
+  const worldPoints = densifyClosedWallPerimeter(perimeter)
+  if (worldPoints.length < 3) return null
+
+  const localPoints = worldPoints.map(worldToLocal)
+  const bottomY = worldPoints.map((point) => {
+    const terrainElevation = terrainBottomAt(point.x, point.y)
+    return terrainElevation == null ? 0 : Math.min(0, terrainElevation - wallBaseElevation)
+  })
+  return buildTerrainPerimeterFillGeometry(localPoints, bottomY, 0)
+}
+
+function mergeWallTerrainFill(
+  body: THREE.BufferGeometry,
+  fill: THREE.BufferGeometry | null,
+  wall: WallNode,
+  boundaryEdges: TaggedWallBoundaryEdge[],
+  effectiveWallHeight: number,
+): THREE.BufferGeometry {
+  if (!fill) return body
+
+  const bodyGeometry = body.index ? body.toNonIndexed() : body
+  if (bodyGeometry !== body) body.dispose()
+  ensureRenderableGeometryAttributes(bodyGeometry)
+  ensureRenderableGeometryAttributes(fill)
+  const merged = mergeGeometries([bodyGeometry, fill], false)
+  if (!merged) {
+    fill.dispose()
+    return bodyGeometry
+  }
+
+  bodyGeometry.dispose()
+  fill.dispose()
+  merged.computeVertexNormals()
+  assignWallMaterialGroups(merged, wall, boundaryEdges, effectiveWallHeight)
+  ensureRenderableGeometryAttributes(merged)
+  return merged
+}
+
 export function generateExtrudedWall(
   wallNode: WallNode,
   childrenNodes: AnyNode[],
@@ -861,6 +943,7 @@ export function generateExtrudedWall(
     { start: 0, end: 1, elevation: baseElevation },
   ],
   storeyHeight = DEFAULT_LEVEL_HEIGHT,
+  terrainBottomAt?: WallTerrainBottomSampler,
 ): THREE.BufferGeometry {
   const wallStart: Point2D = { x: wallNode.start[0], y: wallNode.start[1] }
   const wallEnd: Point2D = { x: wallNode.end[0], y: wallNode.end[1] }
@@ -913,6 +996,9 @@ export function generateExtrudedWall(
   // Convert polygon to local coordinates
   const localPoints = polyPoints.map(worldToLocal)
   const boundaryEdges = buildTaggedWallBoundaryEdges(wallNode, localPoints, miterData)
+  const terrainFill = terrainBottomAt
+    ? buildWallTerrainFillGeometry(polyPoints, worldToLocal, slabElevation, terrainBottomAt)
+    : null
 
   // Build THREE.js shape
   // Shape uses (x, y) where we map: shape.x = local.x, shape.y = -local.z
@@ -1041,7 +1127,13 @@ export function generateExtrudedWall(
     splitGeometry.computeVertexNormals()
     assignWallMaterialGroups(splitGeometry, wallNode, boundaryEdges, effectiveWallHeight)
     ensureRenderableGeometryAttributes(splitGeometry)
-    return splitGeometry
+    return mergeWallTerrainFill(
+      splitGeometry,
+      terrainFill,
+      wallNode,
+      boundaryEdges,
+      effectiveWallHeight,
+    )
   }
 
   // Create wall brush from geometry
@@ -1079,7 +1171,13 @@ export function generateExtrudedWall(
   assignWallMaterialGroups(splitResultGeometry, wallNode, boundaryEdges, effectiveWallHeight)
   ensureRenderableGeometryAttributes(splitResultGeometry)
 
-  return splitResultGeometry
+  return mergeWallTerrainFill(
+    splitResultGeometry,
+    terrainFill,
+    wallNode,
+    boundaryEdges,
+    effectiveWallHeight,
+  )
 }
 
 /**

@@ -6,6 +6,8 @@ export {
   type SolarPanelPresetDims,
   SolarPanelPresetKey,
 } from '../solar-panel-presets'
+// Asset URL allowlist
+export { ALLOWED_ORIGINS_ENV, ALLOWED_SCHEMES, AssetUrl } from './asset-url'
 export { BaseNode, generateId, Material, nodeType, objectId } from './base'
 // Camera
 export { CameraSchema } from './camera'
@@ -268,6 +270,7 @@ export {
 } from './nodes/window'
 export { ZoneNode } from './nodes/zone'
 export { generateSceneMaterialId, SceneMaterial, type SceneMaterialId } from './scene-material'
+export { MAX_TERRAIN_SIDE, TerrainData } from './terrain'
 export type { AnyNodeId, AnyNodeType } from './types'
 // Union types
 export { AnyNode } from './types'

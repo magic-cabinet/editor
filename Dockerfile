@@ -1,9 +1,14 @@
-FROM oven/bun:1.3.1 AS builder
+# Matches `packageManager` in package.json and the version CI installs — a skew
+# here is what makes `--frozen-lockfile` fail inside the image but not locally.
+FROM oven/bun:1.3.14 AS builder
 
 WORKDIR /app
 
+# `next build` runs under `node`, and this image's `node` is a shim that re-execs
+# bun (/usr/local/bun-node-fallback-bin/node). Next 16's build crashes it on both
+# arm64 and amd64. CI does not hit this because GitHub runners have a real node.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates git \
+  && apt-get install -y --no-install-recommends ca-certificates git nodejs \
   && rm -rf /var/lib/apt/lists/*
 
 COPY . .
@@ -13,7 +18,7 @@ RUN bunx tsc --build packages/core/tsconfig.json --force \
   && bunx turbo run build --filter=editor... \
   && bunx tsc --build packages/mcp/tsconfig.json --force
 
-FROM oven/bun:1.3.1 AS runtime
+FROM oven/bun:1.3.14 AS runtime
 
 WORKDIR /app
 

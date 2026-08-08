@@ -31,10 +31,12 @@ import { runRedo, runUndo } from '../lib/history'
 import { isActive } from '../lib/interaction/scope'
 import { copySelectedNodesToEditorClipboard } from '../lib/scene-clipboard'
 import { sfxEmitter } from '../lib/sfx-bus'
+import { activeSiteNode, clampBrushRadius } from '../lib/terrain-sculpt'
 import { toggleWindowOpenState } from '../lib/window-interaction'
 import useDeleteConfirmation from '../store/use-delete-confirmation'
 import useEditor, { getActiveContinuationContext, getActiveSnapContext } from '../store/use-editor'
 import useInteractionScope, { getMovingNode } from '../store/use-interaction-scope'
+import { groupCurrentSelection, ungroupCurrentSelection } from '../store/use-session-groups'
 
 // References (guide/scan) are selected via `useEditor.selectedReferenceId`, not
 // the viewer selection, so selection-based key arms (R/T rotate) need this
@@ -209,7 +211,11 @@ export const useKeyboard = ({
       }
 
       // Don't handle shortcuts if user is typing in an input
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
+      ) {
         return
       }
 
@@ -224,6 +230,34 @@ export const useKeyboard = ({
         e.preventDefault()
         useEditor.getState().cyclePaintScope()
         sfxEmitter.emit('sfx:grid-snap')
+        return
+      }
+
+      // Brush size, on the keys every sculpting tool in the industry uses. Gated
+      // on sculpt mode so `[`/`]` stay free everywhere else. Key-repeat is
+      // allowed (unlike the cycles above) because holding to resize is the
+      // expected feel, and the step is multiplicative so one press is a
+      // proportional change at both the floor and 20 m rather than 40× coarser at
+      // the bottom of the range. The range comes from `brushRadiusRange` so this
+      // and the panel's slider cannot disagree about it — and so the low end
+      // tracks the field's sample spacing, below which a dab paints nothing.
+      if (
+        (e.key === '[' || e.key === ']') &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        useEditor.getState().mode === 'terrain-sculpt'
+      ) {
+        e.preventDefault()
+        const { terrainBrush, setTerrainBrush } = useEditor.getState()
+        const factor = e.key === ']' ? 1.25 : 1 / 1.25
+        const radius = clampBrushRadius(
+          activeSiteNode(),
+          Math.round(terrainBrush.radius * factor * 10) / 10,
+        )
+        if (radius !== terrainBrush.radius) {
+          setTerrainBrush({ radius })
+          sfxEmitter.emit('sfx:grid-snap')
+        }
         return
       }
 
@@ -364,6 +398,12 @@ export const useKeyboard = ({
         useEditor.getState().setPhase('structure')
         useEditor.getState().setStructureLayer('elements')
         useEditor.getState().setMode('material-paint')
+      } else if (e.key === 'g' && !e.metaKey && !e.ctrlKey) {
+        if (isVersionPreviewMode) return
+        e.preventDefault()
+        // G for ground. No `setPhase` — `setMode` moves to the site phase itself,
+        // and doing it here would set the phase twice with a mode reset between.
+        useEditor.getState().setMode('terrain-sculpt')
       } else if (e.key === 'c' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
         if (isVersionPreviewMode) return
         e.preventDefault()
@@ -660,9 +700,38 @@ export const useKeyboard = ({
       }
     }
 
+    // Capture-phase Ctrl/Cmd+G so browser "Find next" cannot steal the shortcut
+    // before the editor bubble listener runs. `stopPropagation` here silences the
+    // chord for every other capture listener (floorplan hotkeys, group move,
+    // registry move overlay) — safe only because none of them claim Ctrl/Cmd+G.
+    // `e.code` keeps it on the physical G key across keyboard layouts.
+    const handleSessionGroupKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
+      ) {
+        return
+      }
+      if (useDeleteConfirmation.getState().request) return
+      if (isVersionPreviewMode) return
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      if (e.code !== 'KeyG') return
+
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.shiftKey) {
+        ungroupCurrentSelection()
+      } else {
+        groupCurrentSelection()
+      }
+    }
+
+    window.addEventListener('keydown', handleSessionGroupKeyDown, true)
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
     return () => {
+      window.removeEventListener('keydown', handleSessionGroupKeyDown, true)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
     }
