@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // Load shims FIRST so any subsequent core import sees the RAF polyfill.
 import '../bridge/node-shims'
 
@@ -76,6 +76,14 @@ async function main(): Promise<void> {
       authToken: values['auth-token'],
       allowedOrigins: values['cors-origin'],
       localWorkspace: process.env.PASCAL_MCP_LOCAL_WORKSPACE === '1',
+      ...(process.env.PASCAL_INSTANCE_ID
+        ? {
+            health: {
+              version: process.env.PASCAL_RUNTIME_VERSION ?? version,
+              instanceId: process.env.PASCAL_INSTANCE_ID,
+            },
+          }
+        : {}),
     })
     console.error(`[pascal-mcp] HTTP server listening on ${handle.host}:${handle.port}`)
     const shutdown = async () => {
